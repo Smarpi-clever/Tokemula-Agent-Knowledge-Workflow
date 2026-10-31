@@ -5,6 +5,8 @@
 - 增加 `akf setup` 交互向导：检测依赖，选择项目、Markdown／Obsidian 知识库及同步方式，预览并保存设置。
 - 增加 macOS `Install.command` 入口与可选 Codex marketplace 插件。
 - 分开报告 Installed、Configured、Trusted、Enabled，以及本地提交和远端推送状态。
+- 完善启用验证：授权有效、原生维护完成且无新增事实时，`no_change` 可验证 Enabled；pending、取消和错误不作为成功凭据。
+- 说明 Hook 信任与工具、文件权限的独立边界，项目外维护路径由用户按实际原生审批直接批准。
 - 自动知识更新、自动提交和自动推送分别授权，默认关闭。
 - 支持重复安装、升级、暂停、禁用、卸载和事务回滚，保留用户笔记及恢复状态。
 - 保留与其他 Hooks 共存、人工笔记保护和来源验证。

@@ -179,7 +179,7 @@ def inspect(manager, mapping=None, verify=False):
 
 
 def verify_job(client, mapping, since=0):
-    """Match a saved write to a native hookPrompt item, not manually piped JSON."""
+    """Match a saved write or completed no-change to a native hookPrompt item."""
     config = read_json(Path(mapping["config_path"]))
     db = Path(config["state_dir"]) / "state.sqlite3"
     if not db.is_file():
@@ -190,10 +190,36 @@ def verify_job(client, mapping, since=0):
         job = json.loads(raw)
         if dt.datetime.fromisoformat(job["created_at"].replace("Z", "+00:00")).timestamp() < since:
             continue
-        if job.get("write_state") not in {"local_saved", "committed", "remote_confirmed"}:
-            continue
-        if not job.get("plans") or not all(sha((Path(config["knowledge_root"]) / p["topic"]).read_bytes()) == p["after_sha256"] for p in job["plans"]):
-            continue
+        outcome = "write"
+        if job.get("state") == "no_change":
+            if any(job.get(key) for key in ("pending_updates", "error", "plans", "write_state", "write_history",
+                                            "write_id", "commit", "commit_parent", "stage_owned", "push_attempted",
+                                            "remote_head", "undo_job")):
+                continue
+            project = Path(config["project_root"])
+            knowledge = Path(config["knowledge_root"])
+            observed = [(project, source["path"], source["sha256"]) for source in job.get("source_files", [])]
+            for update in job.get("candidate", {}).get("updates", []):
+                observed.append((knowledge, update["topic"], update.get("expected_sha256")))
+                observed.extend((project, source["path"], source["sha256"])
+                                for source in update.get("evidence", []) if source.get("kind") == "file")
+            unchanged = True
+            for root, relative, expected in observed:
+                path = root / relative
+                if (not path.resolve().is_relative_to(root.resolve())
+                        or any(p.is_symlink() for p in [path, *path.parents] if p.is_relative_to(root))
+                        or path.exists() and not path.is_file()
+                        or (sha(path.read_bytes()) if path.is_file() else None) != expected):
+                    unchanged = False
+                    break
+            if not unchanged:
+                continue
+            outcome = "no_change"
+        else:
+            if job.get("write_state") not in {"local_saved", "committed", "remote_confirmed"}:
+                continue
+            if not job.get("plans") or not all(sha((Path(config["knowledge_root"]) / p["topic"]).read_bytes()) == p["after_sha256"] for p in job["plans"]):
+                continue
         turn_id = job.get("maintenance_turn_id") or job.get("turn_id")
         if not turn_id:
             continue
@@ -202,12 +228,15 @@ def verify_job(client, mapping, since=0):
         while True:
             data = client.request("thread/items/list", params)
             for entry in data.get("data", []):
+                if entry.get("turnId", turn_id) != turn_id:
+                    continue
                 item = entry["item"]
                 if item.get("type") != "hookPrompt":
                     continue
                 for fragment in item["fragments"]:
                     if fragment["text"].startswith(job["prompt_marker"] + "\n") and fragment.get("hookRunId"):
-                        return {"job": job["id"], "session": job["session_id"], "native_hook_run": fragment["hookRunId"]}
+                        return {"job": job["id"], "session": job["session_id"],
+                                "native_hook_run": fragment["hookRunId"], "outcome": outcome}
             if data.get("nextCursor") is None:
                 break
             params = {**params, "cursor": data["nextCursor"]}

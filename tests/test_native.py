@@ -4,7 +4,7 @@ import sqlite3
 import struct
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from akf.native import NativeClient, hook_status
 from akf.install import InstallError, Manager, EVENTS, sha
@@ -109,7 +109,7 @@ class NativeJobPaginationTests(unittest.TestCase):
         client = Mock()
         client.request.side_effect = [self.first_page, second]
         self.assertEqual(verify_job(client, self.mapping),
-                         {"job": "job", "session": "session", "native_hook_run": "native-run"})
+                         {"job": "job", "session": "session", "native_hook_run": "native-run", "outcome": "write"})
         expected = {"threadId": "session", "turnId": "maintenance-turn", "limit": 20, "sortDirection": "desc"}
         self.assertEqual(client.request.call_args_list[0].args, ("thread/items/list", expected))
         self.assertEqual(client.request.call_args_list[1].args,
@@ -132,7 +132,7 @@ class NativeJobPaginationTests(unittest.TestCase):
         client.request.return_value = {"data": [{"item": {"type": "hookPrompt", "fragments": [
             {"text": "unique-marker\nMaintain knowledge.", "hookRunId": "native-run"}]}}]}
         self.assertEqual(verify_job(client, self.mapping),
-                         {"job": "job", "session": "session", "native_hook_run": "native-run"})
+                         {"job": "job", "session": "session", "native_hook_run": "native-run", "outcome": "write"})
         client.request.assert_called_once_with("thread/items/list", {
             "threadId": "session", "turnId": "task-turn", "limit": 20, "sortDirection": "desc"})
 
@@ -145,6 +145,133 @@ class NativeJobPaginationTests(unittest.TestCase):
         self.assertIsNone(verify_job(client, self.mapping))
         client.request.assert_called_once_with("thread/items/list", {
             "threadId": "session", "turnId": "task-turn", "limit": 20, "sortDirection": "desc"})
+
+
+class NativeNoChangeTests(unittest.TestCase):
+    def setUp(self):
+        from akf.engine import Engine
+        scratch = Path(__file__).resolve().parents[1] / ".local/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="native-no-change-", dir=scratch)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.project = self.root / "project"
+        self.knowledge = self.root / "knowledge"
+        self.project.mkdir()
+        (self.knowledge / "topics").mkdir(parents=True)
+        self.source = self.project / "settings.py"
+        self.source.write_text("LIMIT = 4\n")
+        self.note = self.knowledge / "topics/limits.md"
+        self.config = self.root / "config.json"
+        self.config.write_text(json.dumps({"knowledge_id": "native-no-change", "enabled": True,
+                              "project_root": str(self.project), "knowledge_root": str(self.knowledge),
+                              "state_dir": str(self.root / "state"), "project_snapshot": False}))
+        self.mapping = {"config_path": str(self.config)}
+        self.engine = Engine(self.config)
+        self.addCleanup(self.engine.db.close)
+        self.job = self.new_job("ordinary-task")
+        self.engine.submit(self.job["id"], {"status": "no_change", "updates": []})
+        self.job = self.engine._get("job", self.job["id"])
+
+    def new_job(self, turn):
+        self.engine.start_turn("synthetic-native-session", turn, "a" * 64)
+        self.engine.record_receipt("synthetic-native-session", turn, "tool-" + turn, "Read",
+                                   {"file_path": "settings.py"}, {})
+        return self.engine.prepare_maintenance("synthetic-native-session", turn)
+
+    def candidate(self):
+        from akf.engine import now
+        return {"status": "completed", "updates": [{"topic": "topics/limits.md", "title": "Limits",
+                "claim_id": "configured-limit", "claim_type": "file_fact", "content": "The limit is four.",
+                "expected_sha256": sha(self.note.read_bytes()) if self.note.exists() else None,
+                "observed_at": now(), "evidence": [{"kind": "file", "path": "settings.py",
+                "sha256": sha(self.source.read_bytes()), "excerpt": "LIMIT = 4"}]}]}
+
+    def duplicate_job(self):
+        first = self.new_job("first-fact")
+        self.assertEqual(self.engine.submit(first["id"], self.candidate())["state"], "local_saved")
+        second = self.new_job("same-fact")
+        self.assertEqual(self.engine.submit(second["id"], self.candidate())["state"], "no_change")
+        self.job = self.engine._get("job", second["id"])
+
+    def client(self, **fragment):
+        client = Mock()
+        client.request.return_value = {"data": [{"turnId": self.job.get("maintenance_turn_id") or self.job["turn_id"],
+            "item": {"type": "hookPrompt", "fragments": [{"text": self.job["prompt_marker"] + "\nMaintain knowledge.",
+                                                         "hookRunId": "synthetic-native-run", **fragment}]}}]}
+        return client
+
+    def verify(self, client=None):
+        from datetime import datetime
+        since = datetime.fromisoformat(self.job["created_at"]).timestamp()
+        return verify_job(client or self.client(), self.mapping, since)
+
+    def test_native_empty_no_change_verifies_without_knowledge_or_state_writes(self):
+        before = (self.root / "state/state.sqlite3").read_bytes()
+        self.assertEqual(self.verify(), {"job": self.job["id"], "session": "synthetic-native-session",
+                         "native_hook_run": "synthetic-native-run", "outcome": "no_change"})
+        self.assertFalse(self.note.exists())
+        self.assertEqual((self.root / "state/state.sqlite3").read_bytes(), before)
+
+    def test_same_fact_no_change_verifies_only_while_topic_and_source_match(self):
+        self.duplicate_job()
+        note_before = self.note.read_bytes()
+        proof = self.verify()
+        self.assertIsNotNone(proof)
+        self.assertEqual(proof["outcome"], "no_change")
+        self.assertEqual(self.note.read_bytes(), note_before)
+        self.source.write_text("LIMIT = 8\n")
+        self.assertIsNone(self.verify())
+        self.source.write_text("LIMIT = 4\n")
+        self.note.write_text("Human changed the note.\n")
+        self.assertIsNone(self.verify())
+
+    def test_no_change_rejects_pending_write_error_and_nonterminal_states(self):
+        original = dict(self.job)
+        cases = [("state", value) for value in ("candidate_pending", "applying", "failed", "cancelled", "rejected")]
+        cases += [(key, value) for key, value in (
+            ("pending_updates", [{"error": "Missing synthetic evidence"}]), ("plans", [{"topic": "topics/limits.md"}]),
+            ("write_state", "local_saved"), ("write_history", [{"write_state": "local_saved"}]),
+            ("write_id", "previous-write"), ("commit", "b" * 40), ("commit_parent", "c" * 40),
+            ("stage_owned", True), ("push_attempted", True), ("remote_head", "d" * 40),
+            ("undo_job", "undo"), ("error", "Unresolved synthetic error"))]
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                self.engine._put("job", original["id"], {**original, key: value})
+                client = self.client()
+                self.assertIsNone(self.verify(client))
+                client.request.assert_not_called()
+
+    def test_no_change_still_needs_matching_native_nonce_type_run_and_turn(self):
+        for fragment in ({"text": "different-marker\nMaintain knowledge."}, {"hookRunId": None}):
+            with self.subTest(fragment=fragment):
+                self.assertIsNone(self.verify(self.client(**fragment)))
+        client = self.client()
+        client.request.return_value["data"][0]["item"]["type"] = "userMessage"
+        self.assertIsNone(self.verify(client))
+        client = self.client()
+        client.request.return_value["data"][0]["turnId"] = "unrelated-turn"
+        self.assertIsNone(self.verify(client))
+        self.assertIsNone(verify_job(self.client(), self.mapping, since=9999999999))
+
+    def test_no_change_observed_digest_and_paths_remain_bound(self):
+        self.job["source_files"] = [{"path": "settings.py", "sha256": sha(self.source.read_bytes())}]
+        self.engine._put("job", self.job["id"], self.job)
+        self.assertEqual(self.verify()["outcome"], "no_change")
+        self.source.write_text("LIMIT = 8\n")
+        self.assertIsNone(self.verify())
+        outside = self.root / "outside.txt"
+        outside.write_text("Synthetic outside evidence.\n")
+        self.job["source_files"] = [{"path": "../outside.txt", "sha256": sha(outside.read_bytes())}]
+        self.engine._put("job", self.job["id"], self.job)
+        original_read = Path.read_bytes
+
+        def inside_only(path):
+            self.assertNotEqual(path.resolve(), outside.resolve())
+            return original_read(path)
+
+        with patch.object(Path, "read_bytes", autospec=True, side_effect=inside_only):
+            self.assertIsNone(self.verify())
 
 
 if __name__ == "__main__":
