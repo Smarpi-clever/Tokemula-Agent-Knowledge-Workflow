@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/plugin_hook.sh\"", "timeout": 10}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/plugin_hook.sh\"", "timeout": 10}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/plugin_hook.sh\"", "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/plugin_hook.sh\"", "timeout": 10}]}],
+    "Interrupt": [{"hooks": [{"type": "command", "command": "/bin/sh \"${PLUGIN_ROOT}/scripts/plugin_hook.sh\"", "timeout": 3}]}]
+  }
+}

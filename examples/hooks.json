@@ -1,0 +1,10 @@
+{
+  "description": "Inactive template: replace both placeholder paths, authorize the scope, and review/trust the exact definition before installing.",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "python3 /path/to/checkout/akf/__main__.py --config /path/to/local/config.json hook", "timeout": 10}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 /path/to/checkout/akf/__main__.py --config /path/to/local/config.json hook", "timeout": 10}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "python3 /path/to/checkout/akf/__main__.py --config /path/to/local/config.json hook", "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "python3 /path/to/checkout/akf/__main__.py --config /path/to/local/config.json hook", "timeout": 10}]}],
+    "Interrupt": [{"hooks": [{"type": "command", "command": "python3 /path/to/checkout/akf/__main__.py --config /path/to/local/config.json hook", "timeout": 3}]}]
+  }
+}

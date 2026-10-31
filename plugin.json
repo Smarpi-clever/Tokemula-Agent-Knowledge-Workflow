@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agent-knowledge-workflow",
+  "version": "0.2.0",
+  "description": "Tokemula Agent Knowledge Workflow：基于当前 Agent 和工作证据维护本地 Markdown 知识库。",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md",
+      "hooks": "./hooks/hooks.json"
+    }
+  }
+}

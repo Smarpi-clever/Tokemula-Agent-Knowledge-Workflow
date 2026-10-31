@@ -1,0 +1,17 @@
+{
+  "knowledge_id": "synthetic-project",
+  "project_root": "workspace",
+  "knowledge_root": "knowledge",
+  "state_dir": "state",
+  "environment": "synthetic",
+  "enabled": false,
+  "project_snapshot": false,
+  "git": {
+    "auto_commit": false,
+    "auto_push": false,
+    "remote": "origin",
+    "branch": "knowledge-trial",
+    "remote_url": "git@github.com:example/private-knowledge.git",
+    "repository": "example/private-knowledge"
+  }
+}

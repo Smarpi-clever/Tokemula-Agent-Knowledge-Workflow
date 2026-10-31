@@ -1,0 +1,57 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-checks:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Provide the isolated dependency-detection fixture
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/akw-fixture-bin"
+          cat > "$RUNNER_TEMP/akw-fixture-bin/codex" <<'SH'
+          #!/bin/sh
+          if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+            printf '%s\n' 'codex-cli synthetic-dependency-fixture'
+          else
+            printf '%s\n' 'The CI fixture supports dependency detection only.' >&2
+            exit 64
+          fi
+          SH
+          chmod 755 "$RUNNER_TEMP/akw-fixture-bin/codex"
+          printf '%s\n' "$RUNNER_TEMP/akw-fixture-bin" >> "$GITHUB_PATH"
+      - name: Check source and isolated tests
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_TERMINAL_PROMPT: "0"
+        run: make check test
+      - name: Reproduce both committed-source archives
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_NOSYSTEM: "1"
+          GIT_TERMINAL_PROMPT: "0"
+        shell: bash
+        run: |
+          python3 -B scripts/build_package.py --release --output "$RUNNER_TEMP/akw-package-a"
+          python3 -B scripts/build_package.py --release --output "$RUNNER_TEMP/akw-package-b"
+          cmp "$RUNNER_TEMP/akw-package-a/SHA256SUMS" "$RUNNER_TEMP/akw-package-b/SHA256SUMS"
+          for archive in "$RUNNER_TEMP/akw-package-a/"*.zip; do
+            cmp "$archive" "$RUNNER_TEMP/akw-package-b/$(basename "$archive")"
+          done
