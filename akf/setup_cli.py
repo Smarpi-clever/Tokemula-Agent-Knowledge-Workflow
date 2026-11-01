@@ -5,6 +5,8 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import sqlite3
 import sys
 
@@ -179,7 +181,7 @@ def inspect(manager, mapping=None, verify=False):
 
 
 def verify_job(client, mapping, since=0):
-    """Match a saved write or completed no-change to a native hookPrompt item."""
+    """Bind a terminal job to native Hook context and its originating task."""
     config = read_json(Path(mapping["config_path"]))
     db = Path(config["state_dir"]) / "state.sqlite3"
     if not db.is_file():
@@ -223,6 +225,67 @@ def verify_job(client, mapping, since=0):
         turn_id = job.get("maintenance_turn_id") or job.get("turn_id")
         if not turn_id:
             continue
+        prefinal = job.get("preparation_source") == "prefinal"
+        if prefinal:
+            marker = job.get("trigger_marker", "")
+            tool_id = job.get("trigger_tool_use_id")
+            receipt = next((r for r in job.get("receipts", [])
+                            if r.get("id") == job.get("trigger_receipt_id")), None)
+            if (not re.fullmatch(r"\[AKF-PREFINAL:[0-9a-f]{32}\]", marker)
+                    or job.get("trigger_event") != "PostToolUse" or turn_id != job.get("turn_id")
+                    or not tool_id or not receipt or receipt.get("tool_use_id") != tool_id
+                    or receipt.get("session_id") != job["session_id"] or receipt.get("turn_id") != turn_id
+                    or receipt["id"] != sha((job["session_id"] + ":" + turn_id + ":" + tool_id).encode())[:24]):
+                continue
+            trigger_time = dt.datetime.fromisoformat(receipt["observed_at"].replace("Z", "+00:00")).timestamp()
+            prepared_time = dt.datetime.fromisoformat(job["created_at"].replace("Z", "+00:00")).timestamp()
+            thread = client.request("thread/read", {"threadId": job["session_id"], "includeTurns": False}).get("thread", {})
+            if (thread.get("id") != job["session_id"] or not thread.get("path") or not thread.get("cwd")
+                    or not Path(thread["cwd"]).resolve().is_relative_to(Path(config["project_root"]).resolve())):
+                continue
+            rollout = Path(thread["path"])
+            sessions = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().absolute() / "sessions"
+            if (not rollout.is_absolute() or not rollout.is_relative_to(sessions) or not rollout.is_file()
+                    or not rollout.resolve().is_relative_to(sessions.resolve())
+                    or any(p.is_symlink() for p in (rollout, *rollout.parents) if p.is_relative_to(sessions))):
+                continue
+            with rollout.open("rb") as stream:
+                offset = max(0, stream.seek(0, 2) - 4_194_304)
+                stream.seek(offset)
+                tail = stream.read(4_194_304)
+            lines = tail.splitlines()[1:] if offset else tail.splitlines()
+            hidden_context = False
+            for line in lines:
+                try:
+                    record = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(record, dict) or not isinstance(record.get("payload"), dict):
+                    continue
+                payload = record.get("payload", {})
+                metadata = payload.get("internal_chat_message_metadata_passthrough", {})
+                if not isinstance(metadata, dict):
+                    continue
+                context_time = metadata.get("create_time")
+                if (record.get("type") != "response_item" or payload.get("type") != "message"
+                        or payload.get("role") != "developer" or metadata.get("turn_id") != turn_id
+                        or isinstance(context_time, bool) or not isinstance(context_time, (int, float))
+                        or not max(since, trigger_time) <= context_time <= prepared_time):
+                    continue
+                for content, kind, details in zip(payload.get("content", []), metadata.get("content_item_kinds", []),
+                                                   metadata.get("content_item_metadata", [])):
+                    if not isinstance(content, dict) or not isinstance(details, dict):
+                        continue
+                    provenance = details.get("provenance", {})
+                    if (kind == "hooks.additional_context" and isinstance(provenance, dict) and provenance.get("type") == "harness"
+                            and provenance.get("hook") is True and content.get("type") == "input_text"
+                            and isinstance(content.get("text"), str) and content["text"].startswith(marker + "\n")):
+                        hidden_context = True
+                        break
+                if hidden_context:
+                    break
+            if not hidden_context:
+                continue
         params = {"threadId": job["session_id"], "turnId": turn_id,
                   "limit": 20, "sortDirection": "desc"}
         while True:
@@ -231,6 +294,28 @@ def verify_job(client, mapping, since=0):
                 if entry.get("turnId", turn_id) != turn_id:
                     continue
                 item = entry["item"]
+                if prefinal:
+                    if item.get("id") != tool_id:
+                        continue
+                    native_type = item.get("type")
+                    matches = native_type in {"subAgentActivity", "collabAgentToolCall", "fileChange", "imageView"}
+                    if receipt.get("tool_name") == "Bash":
+                        command = item.get("command", "")
+                        try:
+                            words = shlex.split(command)
+                        except ValueError:
+                            words = []
+                        if (len(words) == 3 and Path(words[0]).name in {"sh", "bash", "zsh", "dash", "ksh", "fish"}
+                                and words[1] in {"-c", "-lc"}):
+                            command = words[2]
+                        matches = native_type == "commandExecution" and sha(command.encode()) == receipt.get("command_sha256")
+                    elif str(receipt.get("tool_name", "")).startswith("mcp__"):
+                        matches = (native_type == "mcpToolCall" and receipt["tool_name"] ==
+                                   "mcp__" + item.get("server", "") + "__" + item.get("tool", ""))
+                    if matches:
+                        return {"job": job["id"], "session": job["session_id"], "outcome": outcome,
+                                "native_hook_context": marker, "native_tool_use_id": tool_id, "source": "prefinal"}
+                    continue
                 if item.get("type") != "hookPrompt":
                     continue
                 for fragment in item["fragments"]:

@@ -45,11 +45,14 @@ class ReadScopeTests(unittest.TestCase):
     def observed_job(self, turn="task", prompt=True):
         if prompt:
             handle_event(self.event("UserPromptSubmit", turn, prompt="Inspect the configured limit."), self.engine)
-        handle_event(self.event("PostToolUse", turn, tool_use_id="read-" + turn, tool_name="Bash",
-                               tool_input={"cmd": "cat settings.py"}, tool_response={"exit_code": 0}), self.engine)
-        output = handle_event(self.event("Stop", turn), self.engine)
-        self.assertEqual(output["decision"], "block")
-        return self.engine._all("job")[-1]
+        hint = handle_event(self.event("PostToolUse", turn, tool_use_id="read-" + turn, tool_name="Bash",
+                                      tool_input={"cmd": "cat settings.py"}, tool_response={"exit_code": 0}), self.engine)
+        self.assertEqual(hint["hookSpecificOutput"]["hookEventName"], "PostToolUse")
+        job = self.engine.prepare_maintenance("scope-session", turn)
+        self.assertEqual(job["trigger_marker"], hint["hookSpecificOutput"]["additionalContext"].splitlines()[0])
+        self.assertEqual(job["preparation_source"], "prefinal")
+        self.assertEqual(handle_event(self.event("Stop", turn), self.engine), {})
+        return job
 
     def candidate(self):
         return {"status": "completed", "updates": [{"topic": "topics/limits.md", "title": "Limits",

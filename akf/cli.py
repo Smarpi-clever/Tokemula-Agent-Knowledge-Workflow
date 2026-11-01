@@ -15,6 +15,9 @@ def main(argv=None):
     parser.add_argument("--json", action="store_true", help="保留 JSON 输出")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("hook")
+    prepare = sub.add_parser("prepare", help="在当前任务最终答复前准备知识维护证据")
+    prepare.add_argument("--session", required=True)
+    prepare.add_argument("--turn", required=True)
     context = sub.add_parser("context")
     context.add_argument("--task", default="")
     status = sub.add_parser("status")
@@ -58,7 +61,7 @@ def main(argv=None):
                     manager.config(mapping)
                 if mapping and args.command in {"pause", "disable", "enable"}:
                     result = manager.control(mapping["id"], args.command)
-                elif mapping and (mapping["paused"] or mapping["disabled"] or not manager.registry().get("installed") or mapping.get("archived") and args.command == "hook") and args.command in {"hook", "submit", "resume", "undo"}:
+                elif mapping and (mapping["paused"] or mapping["disabled"] or not manager.registry().get("installed") or mapping.get("archived") and args.command == "hook") and args.command in {"hook", "prepare", "submit", "resume", "undo"}:
                     result = {} if args.command == "hook" else {"state": "paused"}
                 else:
                     from .engine import Engine
@@ -110,6 +113,13 @@ def business(args, engine):
             result = handle_event(payload, engine)
         else:
             result = engine.submit(args.job, payload)
+    elif args.command == "prepare":
+        job = engine.prepare_maintenance(args.session, args.turn)
+        if job is None:
+            result = {"state": "not_prepared"}
+        else:
+            from .hooks import maintenance_instructions
+            result = {"job": job, "instructions": maintenance_instructions(job)}
     elif args.command == "context":
         result = engine.context(args.task)
     elif args.command == "status":

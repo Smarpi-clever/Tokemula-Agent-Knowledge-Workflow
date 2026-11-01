@@ -310,7 +310,7 @@ class Engine:
             entry["stop_hook_active"] = stop_hook_active
         self._put("diagnostic", key, entry)
 
-    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response) -> dict:
+    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response, *, prefinal_hint=False) -> dict:
         if not self._active() or self._maintenance(session_id, turn_id):
             return {"state": "ignored"}
         key = session_id + ":" + turn_id
@@ -329,7 +329,7 @@ class Engine:
         receipt_id = digest((session_id + ":" + turn_id + ":" + tool_use_id).encode())[:24]
         existing = self._get("receipt", receipt_id)
         if existing is not None:
-            return {"state": "recorded", "receipt_id": receipt_id, "exit_code": existing["exit_code"]}
+            return {"state": "recorded", "receipt_id": receipt_id, "exit_code": existing["exit_code"], "first_receipt": False}
         receipts = [r for r in self._all("receipt") if r["session_id"] == session_id and r["turn_id"] == turn_id]
         if len(receipts) >= 200:
             turn["partial_evidence"] = True
@@ -396,14 +396,25 @@ class Engine:
                     if key in response
                 }
         self._put("receipt", receipt_id, receipt)
-        return {"state": "recorded", "receipt_id": receipt_id, "exit_code": exit_code}
+        first_hint = prefinal_hint and not turn.get("maintenance_trigger")
+        result = {"state": "recorded", "receipt_id": receipt_id, "exit_code": exit_code,
+                  "first_receipt": first_hint}
+        if first_hint:
+            trigger = {"receipt_id": receipt_id, "marker": "[AKF-PREFINAL:" + uuid.uuid4().hex + "]",
+                       "tool_use_id": tool_use_id, "event": "PostToolUse"}
+            turn["maintenance_trigger"] = trigger
+            self._put("turn", key, turn)
+            result["trigger_marker"] = trigger["marker"]
+        return result
 
-    def prepare_maintenance(self, session_id, turn_id) -> dict | None:
+    def prepare_maintenance(self, session_id, turn_id, *, source="prefinal") -> dict | None:
         if not self._active() or self._maintenance(session_id, turn_id):
             return None
         turn = self._get("turn", session_id + ":" + turn_id)
-        if not turn or turn["cancelled"] or turn["job_id"]:
+        if not turn or turn["cancelled"]:
             return None
+        if turn["job_id"]:
+            return self._get("job", turn["job_id"])
         snapshot = self._snapshot()
         changed = [{"path": p, "sha256": sha} for p, sha in snapshot.items() if turn["baseline"].get(p) != sha]
         receipts = [r for r in self._all("receipt") if r["session_id"] == session_id and r["turn_id"] == turn_id]
@@ -411,13 +422,18 @@ class Engine:
             return None
         job_id = uuid.uuid4().hex
         job = {"id": job_id, "session_id": session_id, "turn_id": turn_id, "created_at": now(),
-               "state": "candidate_pending", "source_files": changed, "receipts": receipts,
+               "state": "candidate_pending", "preparation_source": source,
+               "source_files": changed, "receipts": receipts,
                "partial_evidence": turn.get("partial_evidence", False) or self._snapshot_truncated,
                "origin": turn.get("origin", "user_prompt"),
                "baseline_observed_at": turn.get("baseline_observed_at", turn["created_at"]),
                "prompt_hash": turn["prompt_hash"], "prompt_marker": "[AKF-MAINTENANCE:" + job_id + "]",
                "cli_command": self._argv("submit", "--job", job_id), "context_command": self._argv("context"),
                "status_command": self._argv("status", "--job", job_id)}
+        trigger = turn.get("maintenance_trigger")
+        if trigger:
+            job.update(trigger_marker=trigger["marker"], trigger_receipt_id=trigger["receipt_id"],
+                       trigger_tool_use_id=trigger["tool_use_id"], trigger_event=trigger["event"])
         self._put("job", job_id, job)
         turn["job_id"] = job_id
         self._put("turn", session_id + ":" + turn_id, turn)
