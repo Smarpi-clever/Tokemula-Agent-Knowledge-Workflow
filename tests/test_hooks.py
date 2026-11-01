@@ -6,7 +6,7 @@ import hashlib
 from pathlib import Path
 import unittest
 
-from akf.hooks import handle_event
+from akf.hooks import handle_event, maintenance_instructions
 
 
 class FakeEngine:
@@ -19,6 +19,7 @@ class FakeEngine:
         self.pending_marker = None
         self.maintenance = False
         self.receipts = []
+        self.prepared_job = None
         self.job = {
             "id": "job-123",
             "session_id": "session-1",
@@ -59,22 +60,31 @@ class FakeEngine:
     def record_event_diagnostic(self, event_name, session_id, turn_id, stop_hook_active=None):
         pass
 
-    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response):
+    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response, *, prefinal_hint=False):
         self.calls.append(("receipt", session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response))
-        if not self.maintenance:
-            self.receipts.append(tool_use_id)
+        if self.maintenance or self.prepared_job or self.job is None:
+            return {"state": "ignored"}
+        if tool_use_id in self.receipts:
+            return {"state": "recorded", "first_receipt": False}
+        first = not self.receipts
+        self.receipts.append(tool_use_id)
+        return {"state": "recorded", "first_receipt": first and prefinal_hint,
+                "receipt_id": "receipt-1", "trigger_marker": "[AKF-PREFINAL:synthetic-trigger]"}
 
-    def prepare_maintenance(self, session_id, turn_id):
-        self.calls.append(("prepare", session_id, turn_id))
+    def prepare_maintenance(self, session_id, turn_id, *, source="prefinal"):
+        self.calls.append(("prepare", session_id, turn_id, source))
         job, self.job = self.job, None
         if job:
+            self.prepared_job = job
             self.pending_marker = job["prompt_marker"]
-        return job
+            job["preparation_source"] = source
+        return self.prepared_job
 
     def cancel(self, session_id, turn_id):
         self.calls.append(("cancel", session_id, turn_id))
         self.pending_marker = None
         self.job = None
+        self.prepared_job = None
 
 
 class HookAdapterTests(unittest.TestCase):
@@ -130,59 +140,71 @@ class HookAdapterTests(unittest.TestCase):
             "start", "session-1", "turn-1", hashlib.sha256(prompt.encode()).hexdigest(),
         ))
 
-    def test_internal_continuation_is_activated_before_starting_a_turn(self):
-        output = handle_event(self.event("Stop", stop_hook_active=False), self.engine)
+    def test_stored_legacy_continuation_is_activated_before_starting_a_turn(self):
+        job = self.engine.prepare_maintenance("session-1", "turn-1")
         self.engine.calls.clear()
-        self.assertEqual(handle_event(self.event("UserPromptSubmit", turn_id="continued-turn", prompt=output["reason"]), self.engine), {})
+        self.assertEqual(handle_event(self.event("UserPromptSubmit", turn_id="continued-turn", prompt=maintenance_instructions(job)), self.engine), {})
         self.assertTrue(self.engine.maintenance)
         self.assertEqual(self.engine.calls, [("activate", "session-1", "continued-turn")])
 
     def test_forged_or_wrong_session_marker_does_not_activate_maintenance(self):
-        handle_event(self.event("Stop"), self.engine)
+        self.engine.prepare_maintenance("session-1", "turn-1")
         for prompt, session_id in (("[AKF-MAINTENANCE:wrong]\n", "session-1"), ("[AKF-MAINTENANCE:job-123]\n", "different-session")):
             handle_event(self.event("UserPromptSubmit", session_id=session_id, prompt=prompt), self.engine)
             self.assertEqual(self.engine.calls[-1][0], "start")
             self.assertFalse(self.engine.maintenance)
 
-    def test_post_tool_use_forwards_structured_response_without_classifying_success(self):
+    def test_post_tool_use_emits_internal_prefinal_hint_without_freezing_evidence(self):
         payload = {"command": "python3 -m unittest"}
         response = {"exit_code": 1, "output": "synthetic failure"}
-        self.assertEqual(handle_event(self.event(
+        output = handle_event(self.event(
             "PostToolUse", tool_use_id="call-1", tool_name="Bash",
             tool_input=payload, tool_response=response,
-        ), self.engine), {})
+        ), self.engine)
+        specific = output["hookSpecificOutput"]
+        self.assertEqual(specific["hookEventName"], "PostToolUse")
+        text = specific["additionalContext"]
+        self.assertTrue(text.startswith("[AKF-PREFINAL:synthetic-trigger]\n"))
+        for required in ("Finish the user's current task first", "before your final reply", "prepare --session session-1 --turn turn-1", "no_change stay silent"):
+            self.assertIn(required, text)
+        for absent in ("decision", "reason", "systemMessage"):
+            self.assertNotIn(absent, output)
         self.assertEqual(self.engine.calls[-1], (
             "receipt", "session-1", "turn-1", "call-1", "Bash", payload, response,
         ))
+        self.assertNotIn("prepare", [call[0] for call in self.engine.calls])
+        self.assertEqual(handle_event(self.event("PostToolUse", tool_use_id="call-1", tool_name="Bash", tool_input=payload, tool_response=response), self.engine), {})
+        self.assertEqual(handle_event(self.event("PostToolUse", tool_use_id="call-2", tool_name="Bash", tool_input=payload, tool_response=response), self.engine), {})
 
     def test_post_tool_use_missing_response_is_rejected(self):
         with self.assertRaises(ValueError):
             handle_event(self.event("PostToolUse", tool_use_id="call-1", tool_name="Bash", tool_input={}), self.engine)
         self.assertEqual(self.engine.calls, [])
 
-    def test_maintenance_receipts_are_left_to_engine_suppression(self):
-        output = handle_event(self.event("Stop"), self.engine)
-        handle_event(self.event("UserPromptSubmit", prompt=output["reason"]), self.engine)
-        handle_event(self.event("PostToolUse", tool_use_id="maintenance-call", tool_name="Bash", tool_input={}, tool_response={"exit_code": 0}), self.engine)
+    def test_legacy_maintenance_receipts_are_left_to_engine_suppression(self):
+        job = self.engine.prepare_maintenance("session-1", "turn-1")
+        handle_event(self.event("UserPromptSubmit", prompt=maintenance_instructions(job)), self.engine)
+        self.assertEqual(handle_event(self.event("PostToolUse", tool_use_id="maintenance-call", tool_name="Bash", tool_input={}, tool_response={"exit_code": 0}), self.engine), {})
         self.assertEqual(self.engine.receipts, [])
 
-    def test_stop_protocol_separates_same_topic_facts_and_evidence_levels(self):
-        reason = handle_event(self.event("Stop"), self.engine)["reason"]
+    def test_prepare_protocol_separates_same_topic_facts_and_evidence_levels(self):
+        instructions = maintenance_instructions(self.engine.job)
         for required in ("separate updates", "same initial", "distinct stable claim_id",
                          "pending_updates", "pending_count", "Unverified:", "correct and resubmit once"):
-            self.assertIn(required, reason)
-        self.assertNotIn("one update per topic", reason)
-        self.assertNotIn("whose entire", reason)
+            self.assertIn(required, instructions)
+        self.assertNotIn("one update per topic", instructions)
+        self.assertNotIn("whose entire", instructions)
 
-    def test_stop_requests_one_automatic_evidence_bound_maintenance_pass(self):
-        output = handle_event(self.event("Stop", last_assistant_message="UNVERIFIED SUCCESS"), self.engine)
-        self.assertEqual(output["decision"], "block")
-        reason = output["reason"]
-        self.assertTrue(reason.startswith("[AKF-MAINTENANCE:job-123]\n"))
-        for required in ("Do not resume", "no_change", "partial_evidence", "expected_sha256", "test_result", "receipt_id", "status --job job-123", "submit --job job-123", "'/tool with spaces/__main__.py'"):
-            self.assertIn(required, reason)
-        for excluded in ("UNVERIFIED SUCCESS", "PRIVATE_SOURCE_TEXT", "PRIVATE_TOOL_LOG"):
-            self.assertNotIn(excluded, reason)
+    def test_prepare_instructions_keep_evidence_protocol_out_of_stop_output(self):
+        instructions = maintenance_instructions(self.engine.job)
+        self.assertTrue(instructions.startswith("[AKF-MAINTENANCE:job-123]\n"))
+        for required in ("Do not resume", "no_change", "partial_evidence", "expected_sha256", "test_result", "receipt_id", "status --job job-123", "submit --job job-123", "maintenance-only", "'/tool with spaces/__main__.py'"):
+            self.assertIn(required, instructions)
+        for excluded in ("PRIVATE_SOURCE_TEXT", "PRIVATE_TOOL_LOG"):
+            self.assertNotIn(excluded, instructions)
+        self.assertEqual(handle_event(self.event("Stop", last_assistant_message="UNVERIFIED SUCCESS"), self.engine), {})
+        self.assertEqual(self.engine.calls[-1], ("prepare", "session-1", "turn-1", "Stop"))
+        self.assertEqual(self.engine.prepared_job["preparation_source"], "Stop")
 
     def test_stop_hook_active_skips_prepare(self):
         self.assertEqual(handle_event(self.event("Stop", stop_hook_active=True), self.engine), {})
@@ -274,11 +296,14 @@ class RealEngineHookIntegrationTests(unittest.TestCase):
         self.dispatch("PostToolUse", **{**fields, "tool_response": {"exit_code": 0}})
         self.assertEqual(self.state_rows("turn"), [first_turn])
         self.assertEqual(self.state_rows("receipt"), [first_receipt])
-        continuation = self.dispatch("Stop", stop_hook_active=False)
-        self.assertEqual(continuation["decision"], "block")
-        self.assertIn("prompt_hash is null", continuation["reason"])
+        engine = Engine(self.config)
+        try:
+            job = engine.prepare_maintenance("session", "ordinary")
+            self.assertEqual(engine.prepare_maintenance("session", "ordinary"), job)
+        finally:
+            engine.db.close()
+        self.assertIn("prompt_hash is null", maintenance_instructions(job))
         self.assertEqual(self.dispatch("Stop", stop_hook_active=False), {})
-        job = self.state_rows("job")[0]
         self.assertEqual(job["source_files"], [])
         self.assertIsNone(job["prompt_hash"])
         self.assertTrue(job["partial_evidence"])
@@ -338,57 +363,91 @@ class RealEngineHookIntegrationTests(unittest.TestCase):
         self.assertEqual(self.dispatch("Stop", turn="parent", stop_hook_active=False), {})
         self.assertEqual(self.state_rows("job"), [])
 
-    def test_fresh_engine_per_event_preserves_nonce_for_same_and_changed_turn(self):
-        for number, continuation_turn in enumerate(("ordinary", "maintenance")):
-            session = f"session-{number}"
-            with self.subTest(continuation_turn=continuation_turn):
-                self.dispatch("UserPromptSubmit", session=session, prompt="Change the limit and run its focused checks.")
-                self.source.write_text(f"limit={number + 8}\n")
-                self.dispatch(
-                    "PostToolUse", session=session, tool_name="Bash", tool_use_id="test-call",
-                    tool_input={"cmd": "python3 -B -m unittest"},
-                    tool_response={"result": {"exitCode": number}, "output": "synthetic tool output"},
-                )
-                continuation = self.dispatch("Stop", session=session, stop_hook_active=False)
-                self.assertEqual(continuation["decision"], "block")
-                self.assertEqual(self.dispatch("Stop", session=session, stop_hook_active=False), {})
+    def test_same_turn_prefinal_captures_all_task_receipts_and_cancels_safely(self):
+        from akf.engine import Engine
 
-                self.dispatch(
-                    "UserPromptSubmit", session=session, turn=continuation_turn,
-                    prompt=continuation["reason"],
-                )
-                self.dispatch(
-                    "PostToolUse", session=session, turn=continuation_turn,
-                    tool_name="Bash", tool_use_id="maintenance-command",
-                    tool_input={"cmd": "python3 tool.py submit"},
-                    tool_response={"exit_code": 0},
-                )
-                self.assertEqual(self.dispatch(
-                    "Stop", session=session, turn=continuation_turn, stop_hook_active=True,
-                ), {})
-                self.assertEqual(self.dispatch(
-                    "Stop", session=session, turn=continuation_turn, stop_hook_active=False,
-                ), {})
+        self.dispatch("UserPromptSubmit", prompt="Change the limit and run its focused checks.")
+        first = self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="first-read",
+                              tool_input={"cmd": "cat limits.txt"}, tool_response={"exit_code": 0})
+        marker = first["hookSpecificOutput"]["additionalContext"].splitlines()[0]
+        self.assertEqual(self.state_rows("job"), [])
+        self.source.write_text("limit=8\n")
+        self.assertEqual(self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="test-call",
+                                      tool_input={"cmd": "python3 -B -m unittest"},
+                                      tool_response={"exit_code": 1}), {})
+        engine = Engine(self.config)
+        try:
+            job = engine.prepare_maintenance("session", "ordinary")
+            self.assertEqual(engine.prepare_maintenance("session", "ordinary"), job)
+        finally:
+            engine.db.close()
+        self.assertEqual(job["trigger_marker"], marker)
+        self.assertEqual(job["trigger_tool_use_id"], "first-read")
+        self.assertEqual(job["trigger_event"], "PostToolUse")
+        self.assertEqual(job["preparation_source"], "prefinal")
+        self.assertEqual([r["tool_use_id"] for r in job["receipts"]], ["first-read", "test-call"])
+        self.assertEqual(job["receipts"][1]["exit_code"], 1)
+        self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="maintenance-command",
+                      tool_input={"cmd": "python3 tool.py submit"}, tool_response={"exit_code": 0})
+        self.assertEqual(len(self.state_rows("receipt")), 2)
+        self.assertEqual(self.dispatch("Stop", stop_hook_active=False), {})
+        self.assertEqual(self.dispatch("Interrupt"), {})
+        self.assertEqual(self.dispatch("Stop", stop_hook_active=False), {})
+        self.assertEqual(self.state_rows("job")[0]["state"], "cancelled")
+        self.assertEqual(list(self.knowledge.iterdir()), [])
 
-                turns = [row for row in self.state_rows("turn") if row["session_id"] == session]
-                receipts = [row for row in self.state_rows("receipt") if row["session_id"] == session]
-                jobs = [row for row in self.state_rows("job") if row["session_id"] == session]
-                self.assertEqual(len(turns), 1)
-                self.assertEqual(turns[0]["turn_id"], "ordinary")
-                self.assertEqual(len(receipts), 1)
-                self.assertEqual(receipts[0]["tool_use_id"], "test-call")
-                self.assertEqual(receipts[0]["exit_code"], number)
-                self.assertEqual(len(jobs), 1)
-                self.assertEqual(jobs[0]["state"], "candidate_pending")
-                self.assertEqual(jobs[0]["maintenance_turn_id"], continuation_turn)
+    def test_stop_without_prefinal_submission_is_silent_and_pending(self):
+        self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="ordinary-read",
+                      tool_input={"cmd": "cat limits.txt"}, tool_response={"exit_code": 0})
+        self.assertEqual(self.dispatch("Stop", stop_hook_active=False), {})
+        job = self.state_rows("job")[0]
+        self.assertEqual(job["state"], "candidate_pending")
+        self.assertEqual(job["preparation_source"], "Stop")
+        self.assertNotIn("write_state", job)
+        self.assertEqual(self.dispatch("Stop", stop_hook_active=False), {})
+        self.assertEqual(len(self.state_rows("job")), 1)
+        self.assertEqual(list(self.knowledge.iterdir()), [])
 
-                self.assertEqual(self.dispatch("Interrupt", session=session, turn=continuation_turn), {})
-                self.assertEqual(self.dispatch(
-                    "Stop", session=session, turn=continuation_turn, stop_hook_active=False,
-                ), {})
-                job = next(row for row in self.state_rows("job") if row["session_id"] == session)
-                self.assertEqual(job["state"], "cancelled")
-                self.assertEqual(list(self.knowledge.iterdir()), [])
+    def test_no_change_prefinal_is_silent_and_creates_no_second_job(self):
+        from akf.engine import Engine
+
+        self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="ordinary-read",
+                      tool_input={"cmd": "cat limits.txt"}, tool_response={"exit_code": 0})
+        engine = Engine(self.config)
+        try:
+            job = engine.prepare_maintenance("session", "ordinary")
+            self.assertEqual(engine.submit(job["id"], {"status": "no_change", "updates": []})["state"], "no_change")
+        finally:
+            engine.db.close()
+        self.assertEqual(self.dispatch("Stop", stop_hook_active=False), {})
+        self.assertEqual(len(self.state_rows("job")), 1)
+        self.assertEqual(self.state_rows("job")[0]["state"], "no_change")
+        self.assertEqual(list(self.knowledge.iterdir()), [])
+
+    def test_upgrade_existing_turn_emits_one_new_hint_and_binds_its_receipt(self):
+        from akf.engine import Engine
+
+        engine = Engine(self.config)
+        try:
+            engine.record_receipt("session", "ordinary", "old-read", "Bash", {}, {})
+        finally:
+            engine.db.close()
+        self.assertEqual(self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="old-read",
+                                       tool_input={}, tool_response={}), {})
+        first = self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="new-read",
+                              tool_input={}, tool_response={})
+        marker = first["hookSpecificOutput"]["additionalContext"].splitlines()[0]
+        self.assertRegex(marker, r"^\[AKF-PREFINAL:[a-f0-9]{32}\]$")
+        self.assertEqual(self.dispatch("PostToolUse", tool_name="Bash", tool_use_id="later-read",
+                                       tool_input={}, tool_response={}), {})
+        engine = Engine(self.config)
+        try:
+            job = engine.prepare_maintenance("session", "ordinary")
+        finally:
+            engine.db.close()
+        self.assertEqual(job["trigger_marker"], marker)
+        self.assertEqual(job["trigger_tool_use_id"], "new-read")
+        self.assertEqual(job["trigger_receipt_id"], job["receipts"][1]["id"])
 
     def test_interrupt_before_first_stop_retains_failure_without_new_job(self):
         self.dispatch("UserPromptSubmit", prompt="Perform an ordinary synthetic task.")
@@ -410,8 +469,12 @@ class RealEngineHookIntegrationTests(unittest.TestCase):
 
         self.dispatch("UserPromptSubmit", prompt="Investigate a durable limit behavior.")
         self.source.write_text("limit=15\n")
-        continuation = self.dispatch("Stop", stop_hook_active=False)
-        reason = continuation["reason"]
+        engine = Engine(self.config)
+        try:
+            job = engine.prepare_maintenance("session", "ordinary")
+        finally:
+            engine.db.close()
+        reason = maintenance_instructions(job)
         for required in ("long-term value", "Unverified:", "pending_evidence", "evidence=[]"):
             self.assertIn(required, reason)
         self.assertNotIn("If nothing durable is verified", reason)

@@ -676,10 +676,15 @@ class InstallationTests(unittest.TestCase):
             return json.loads(result.stdout)
         event("UserPromptSubmit", prompt="Change the synthetic limit to eight.")
         source.write_text("LIMIT = 8\n")
-        event("PostToolUse", tool_use_id="synthetic-write", tool_name="Write",
-              tool_input={"file_path": str(source)}, tool_response={})
-        stop = event("Stop", stop_hook_active=False)
-        identity = stop["reason"].split("[AKF-MAINTENANCE:", 1)[1].split("]", 1)[0]
+        hint = event("PostToolUse", tool_use_id="synthetic-write", tool_name="Write",
+                     tool_input={"file_path": str(source)}, tool_response={})
+        self.assertEqual(hint["hookSpecificOutput"]["hookEventName"], "PostToolUse")
+        prepared = self.command("prepare", "--session", "synthetic-session", "--turn", "synthetic-turn")
+        self.assertEqual(prepared.returncode, 0, prepared.stdout)
+        job = json.loads(prepared.stdout)["job"]
+        self.assertEqual(job["preparation_source"], "prefinal")
+        self.assertEqual(job["trigger_marker"], hint["hookSpecificOutput"]["additionalContext"].splitlines()[0])
+        identity = job["id"]
         from akf.engine import now
         payload = {"status": "completed", "updates": [{"topic": "topics/limits.md", "title": "Limits", "claim_id": "limit",
                    "claim_type": "file_fact", "content": "The synthetic limit is eight.", "expected_sha256": None,

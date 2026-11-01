@@ -219,7 +219,7 @@ class EngineTests(Fixture):
                  'tool_use_id': 'call', 'tool_name': 'Bash',
                  'tool_input': {'command': 'private command'}, 'tool_response': token,
                  'private_unknown_field': token}
-        with patch.object(self.engine, 'record_receipt'):
+        with patch.object(self.engine, 'record_receipt', return_value={'state': 'ignored'}):
             self.assertEqual(handle_event(event, self.engine), {})
         self.assertEqual(handle_event({**event, 'hook_event_name': 'Stop',
                                        'stop_hook_active': False, 'last_assistant_message': token}, self.engine), {})
@@ -238,7 +238,7 @@ class EngineTests(Fixture):
         before = database.read_bytes()
         for text in (token, 'private command', 'private_unknown_field', 'untracked-session', 'untracked-turn'):
             self.assertNotIn(text.encode(), before)
-        with patch.object(self.engine, 'record_receipt'):
+        with patch.object(self.engine, 'record_receipt', return_value={'state': 'ignored'}):
             handle_event(event, self.engine)
         self.assertEqual(database.read_bytes(), before)
 
@@ -457,21 +457,40 @@ class EngineTests(Fixture):
         self.assertEqual(self.engine.submit(second['id'], candidate)['state'], 'stale')
         self.assertNotIn('Outdated statement.', (self.knowledge / 'topics' / 'limits.md').read_text())
 
-    def test_real_engine_hook_nonce_and_interrupt_integration(self):
+    def test_real_engine_prefinal_and_interrupt_integration(self):
         base = {'session_id': 'integrated', 'cwd': str(self.project), 'turn_id': 'ordinary'}
         handle_event({**base, 'hook_event_name': 'UserPromptSubmit', 'prompt': 'Change the request limit.'}, self.engine)
+        output = handle_event({**base, 'hook_event_name': 'PostToolUse', 'tool_use_id': 'read',
+                               'tool_name': 'Bash', 'tool_input': {'cmd': 'cat settings.py'},
+                               'tool_response': {'exit_code': 0}}, self.engine)
+        self.assertEqual(output['hookSpecificOutput']['hookEventName'], 'PostToolUse')
         (self.project / 'settings.py').write_text('LIMIT = 19\n')
-        result = handle_event({**base, 'hook_event_name': 'Stop', 'stop_hook_active': False}, self.engine)
-        self.assertEqual(result['decision'], 'block')
+        job = self.engine.prepare_maintenance('integrated', 'ordinary')
+        self.assertEqual(self.engine.prepare_maintenance('integrated', 'ordinary'), job)
+        self.assertEqual(self.engine.record_receipt('integrated', 'ordinary', 'm1', 'Bash', {}, {'exit_code': 0})['state'], 'ignored')
         self.assertEqual(handle_event({**base, 'hook_event_name': 'Stop', 'stop_hook_active': False}, self.engine), {})
-        maintenance = {**base, 'turn_id': 'maintenance'}
-        handle_event({**maintenance, 'hook_event_name': 'UserPromptSubmit', 'prompt': result['reason']}, self.engine)
-        self.assertEqual(self.engine.record_receipt('integrated', 'maintenance', 'm1', 'Bash', {}, {'exit_code': 0})['state'], 'ignored')
-        self.assertEqual(handle_event({**maintenance, 'hook_event_name': 'Stop', 'stop_hook_active': True}, self.engine), {})
-        self.assertEqual(handle_event({**maintenance, 'hook_event_name': 'Interrupt'}, self.engine), {})
-        job = self.engine._all('job')[-1]
-        self.assertEqual(job['state'], 'cancelled')
-        self.assertEqual(handle_event({**maintenance, 'hook_event_name': 'Stop', 'stop_hook_active': False}, self.engine), {})
+        self.assertEqual(handle_event({**base, 'hook_event_name': 'Interrupt'}, self.engine), {})
+        self.assertEqual(self.engine._get('job', job['id'])['state'], 'cancelled')
+        self.assertEqual(handle_event({**base, 'hook_event_name': 'Stop', 'stop_hook_active': False}, self.engine), {})
+
+    def test_direct_preparation_does_not_claim_a_native_prefinal_hint(self):
+        self.engine.start_turn('session', 'direct', 'a' * 64)
+        receipt = self.engine.record_receipt('session', 'direct', 'read', 'Bash', {}, {})
+        self.assertFalse(receipt['first_receipt'])
+        job = self.engine.prepare_maintenance('session', 'direct')
+        self.assertNotIn('trigger_marker', job)
+        self.assertNotIn('trigger_tool_use_id', job)
+        self.assertEqual(job['preparation_source'], 'prefinal')
+
+    def test_inactive_preparation_and_hint_leave_business_state_unchanged(self):
+        self.engine.start_turn('session', 'inactive', 'a' * 64)
+        for action in ('pause', 'disable'):
+            self.engine.control(action)
+            before = (self.root / 'state' / 'state.sqlite3').read_bytes()
+            self.assertEqual(self.engine.record_receipt('session', 'inactive', action, 'Bash', {}, {}, prefinal_hint=True), {'state': 'ignored'})
+            self.assertIsNone(self.engine.prepare_maintenance('session', 'inactive'))
+            self.assertEqual((self.root / 'state' / 'state.sqlite3').read_bytes(), before)
+            self.engine.control('enable')
 
     def test_read_only_task_can_offer_evidence_for_agent_judgment(self):
         self.engine.start_turn('session', 'read', 'a' * 64)
@@ -493,6 +512,49 @@ if __name__ == '__main__':
     unittest.main()
 
 class EntrypointTests(Fixture):
+    def prepare_cli(self, session='cli-session', turn='cli-turn'):
+        entry = ROOT / 'akf' / '__main__.py'
+        result = subprocess.run([sys.executable, '-B', str(entry), '--config', str(self.config),
+                                 'prepare', '--session', session, '--turn', turn],
+                                cwd=self.project, capture_output=True, text=True,
+                                env={**os.environ, 'AKF_HOME': str(self.root / 'installation'),
+                                     'PYTHONDONTWRITEBYTECODE': '1'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_prepare_cli_is_idempotent_and_keeps_same_turn_evidence_complete(self):
+        base = {'hook_event_name': 'PostToolUse', 'session_id': 'cli-session', 'turn_id': 'cli-turn',
+                'cwd': str(self.project), 'tool_name': 'Bash', 'tool_input': {'cmd': 'cat settings.py'},
+                'tool_response': {'exit_code': 0}}
+        first = handle_event({**base, 'tool_use_id': 'first'}, self.engine)
+        self.assertEqual(self.engine._all('job'), [])
+        (self.project / 'settings.py').write_text('LIMIT = 8\n')
+        handle_event({**base, 'tool_use_id': 'last'}, self.engine)
+        prepared = self.prepare_cli()
+        self.assertEqual(self.prepare_cli(), prepared)
+        job = prepared['job']
+        self.assertEqual(len(job['receipts']), 2)
+        self.assertEqual(job['trigger_marker'], first['hookSpecificOutput']['additionalContext'].splitlines()[0])
+        self.assertEqual(job['trigger_tool_use_id'], 'first')
+        self.assertIn('maintenance-only', prepared['instructions'])
+        self.assertEqual(self.engine.submit(job['id'], self.candidate(job))['state'], 'local_saved')
+        self.assertIn('The request limit is eight.', (self.knowledge / 'topics/limits.md').read_text())
+        self.assertEqual(handle_event({**base, 'hook_event_name': 'Stop'}, self.engine), {})
+        self.assertEqual(len(self.engine._all('job')), 1)
+
+    def test_prepare_cli_without_evidence_does_not_create_a_job(self):
+        self.assertEqual(self.prepare_cli(), {'state': 'not_prepared'})
+        self.assertEqual(self.engine._all('job'), [])
+
+    def test_prepare_cli_no_change_does_not_create_a_note_or_restart(self):
+        self.engine.record_receipt('cli-session', 'cli-turn', 'read', 'Bash', {}, {})
+        prepared = self.prepare_cli()
+        self.assertEqual(self.engine.submit(prepared['job']['id'], {'status': 'no_change', 'updates': []})['state'], 'no_change')
+        repeated = self.prepare_cli()
+        self.assertEqual(repeated['job']['id'], prepared['job']['id'])
+        self.assertEqual(repeated['job']['state'], 'no_change')
+        self.assertEqual(list((self.knowledge / 'topics').iterdir()), [])
+
     def test_cli_from_different_cwd_and_no_obsidian_dependency(self):
         entry = ROOT / 'akf' / '__main__.py'
         result = subprocess.run([__import__('sys').executable, '-B', str(entry), '--config', str(self.config), 'context'],

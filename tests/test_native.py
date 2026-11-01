@@ -1,3 +1,5 @@
+import copy
+import datetime as dt
 import json
 from pathlib import Path
 import sqlite3
@@ -177,7 +179,7 @@ class NativeNoChangeTests(unittest.TestCase):
         self.engine.start_turn("synthetic-native-session", turn, "a" * 64)
         self.engine.record_receipt("synthetic-native-session", turn, "tool-" + turn, "Read",
                                    {"file_path": "settings.py"}, {})
-        return self.engine.prepare_maintenance("synthetic-native-session", turn)
+        return self.engine.prepare_maintenance("synthetic-native-session", turn, source="Stop")
 
     def candidate(self):
         from akf.engine import now
@@ -272,6 +274,172 @@ class NativeNoChangeTests(unittest.TestCase):
 
         with patch.object(Path, "read_bytes", autospec=True, side_effect=inside_only):
             self.assertIsNone(self.verify())
+
+
+class NativePrefinalTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="native-prefinal-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.knowledge = self.root / "knowledge"
+        (self.knowledge / "topics").mkdir(parents=True)
+        self.codex = self.root / "codex"
+        self.rollout = self.codex / "sessions/2026/11/01/rollout-synthetic.jsonl"
+        self.rollout.parent.mkdir(parents=True)
+        environment = patch.dict("os.environ", {"CODEX_HOME": str(self.codex)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        config = self.root / "config.json"
+        config.write_text(json.dumps({"state_dir": str(self.root), "project_root": str(self.project),
+                                      "knowledge_root": str(self.knowledge)}))
+        self.mapping = {"config_path": str(config)}
+        self.marker = "[AKF-PREFINAL:" + "a" * 32 + "]"
+        self.trigger_time = dt.datetime(2026, 11, 1, 5, tzinfo=dt.timezone.utc).timestamp()
+        receipt = {"session_id": "native-session", "turn_id": "task-turn", "tool_use_id": "exec-trigger",
+                   "tool_name": "Bash", "command_sha256": sha(b"pwd"),
+                   "observed_at": dt.datetime.fromtimestamp(self.trigger_time, dt.timezone.utc).isoformat()}
+        receipt["id"] = sha(b"native-session:task-turn:exec-trigger")[:24]
+        self.job = {"id": "prefinal-job", "session_id": "native-session", "turn_id": "task-turn",
+                    "state": "no_change", "created_at": "2026-11-01T05:01:00+00:00",
+                    "preparation_source": "prefinal", "trigger_event": "PostToolUse", "trigger_marker": self.marker,
+                    "trigger_tool_use_id": "exec-trigger", "trigger_receipt_id": receipt["id"], "receipts": [receipt]}
+        self.database = self.root / "state.sqlite3"
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("CREATE TABLE state (kind TEXT, value TEXT)")
+            connection.execute("INSERT INTO state VALUES ('job', ?)", (json.dumps(self.job),))
+        self.message = {"type": "response_item", "payload": {"type": "message", "role": "developer",
+                        "content": [{"type": "input_text", "text": self.marker + "\nMaintain before final response."}],
+                        "internal_chat_message_metadata_passthrough": {"turn_id": "task-turn",
+                            "create_time": self.trigger_time + 1, "content_item_kinds": ["hooks.additional_context"],
+                            "content_item_metadata": [{"provenance": {"type": "harness", "hook": True}}]}}}
+        self.thread = {"id": "native-session", "cwd": str(self.project), "path": str(self.rollout)}
+        self.native_item = {"turnId": "task-turn", "item": {"type": "commandExecution", "id": "exec-trigger",
+                            "command": "/bin/zsh -lc pwd", "status": "completed", "exitCode": 0}}
+        self.save()
+
+    def save(self):
+        self.rollout.write_text(json.dumps(self.message) + "\n")
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE state SET value=? WHERE kind='job'", (json.dumps(self.job),))
+
+    def client(self, pages=None):
+        pages = iter(pages or [{"data": [self.native_item], "nextCursor": None}])
+        client = Mock()
+
+        def request(method, params):
+            if method == "thread/read":
+                self.assertEqual(params, {"threadId": "native-session", "includeTurns": False})
+                return {"thread": self.thread}
+            self.assertEqual(method, "thread/items/list")
+            self.assertEqual(params["threadId"], "native-session")
+            self.assertEqual(params["turnId"], "task-turn")
+            return next(pages)
+
+        client.request.side_effect = request
+        return client
+
+    def verify(self, client=None):
+        return verify_job(client or self.client(), self.mapping, self.trigger_time - 1)
+
+    def test_hidden_native_context_and_original_tool_verify_without_writes(self):
+        before = self.database.read_bytes()
+        self.assertEqual(self.verify(), {"job": "prefinal-job", "session": "native-session", "outcome": "no_change",
+                         "native_hook_context": self.marker, "native_tool_use_id": "exec-trigger", "source": "prefinal"})
+        self.assertEqual(self.database.read_bytes(), before)
+        self.assertEqual(list((self.knowledge / "topics").iterdir()), [])
+        (self.project / "src").mkdir()
+        self.thread["cwd"] = str(self.project / "src")
+        self.assertIsNotNone(self.verify())
+
+    def test_context_provenance_role_and_content_index_are_bound(self):
+        original = copy.deepcopy(self.message)
+        for role in ("user", "assistant"):
+            with self.subTest(role=role):
+                self.message = copy.deepcopy(original)
+                self.message["payload"]["role"] = role
+                self.save()
+                self.assertIsNone(self.verify())
+        for change in ("no-provenance", "wrong-source", "hook-false", "wrong-kind", "mixed-content", "non-text"):
+            with self.subTest(change=change):
+                self.message = copy.deepcopy(original)
+                payload = self.message["payload"]
+                metadata = payload["internal_chat_message_metadata_passthrough"]
+                if change == "no-provenance":
+                    metadata["content_item_metadata"] = [{}]
+                elif change == "wrong-source":
+                    metadata["content_item_metadata"][0]["provenance"]["type"] = "user"
+                elif change == "hook-false":
+                    metadata["content_item_metadata"][0]["provenance"]["hook"] = False
+                elif change == "wrong-kind":
+                    metadata["content_item_kinds"] = ["text"]
+                elif change == "non-text":
+                    payload["content"][0]["text"] = None
+                else:
+                    payload["content"].append({"type": "input_text", "text": "Unrelated hook context."})
+                    metadata["content_item_kinds"] = ["text", "hooks.additional_context"]
+                    metadata["content_item_metadata"] = [{}, {"provenance": {"type": "harness", "hook": True}}]
+                self.save()
+                self.assertIsNone(self.verify())
+
+    def test_context_marker_turn_session_cwd_path_and_time_are_bound(self):
+        original = copy.deepcopy(self.message)
+        for change in ("marker", "turn", "old", "future"):
+            with self.subTest(change=change):
+                self.message = copy.deepcopy(original)
+                payload = self.message["payload"]
+                metadata = payload["internal_chat_message_metadata_passthrough"]
+                if change == "marker":
+                    payload["content"][0]["text"] = "Another marker\n" + self.marker
+                elif change == "turn":
+                    metadata["turn_id"] = "other-turn"
+                else:
+                    metadata["create_time"] = self.trigger_time - 10 if change == "old" else self.trigger_time + 120
+                self.save()
+                self.assertIsNone(self.verify())
+        self.message = original
+        self.save()
+        original_thread = dict(self.thread)
+        for field, value in (("id", "another-session"), ("cwd", str(self.knowledge)), ("path", None),
+                             ("path", str(self.mapping["config_path"]))):
+            with self.subTest(field=field, value=value):
+                self.thread = {**original_thread, field: value}
+                self.assertIsNone(self.verify())
+
+    def test_trigger_native_id_command_digest_and_receipt_identity_are_bound(self):
+        original_item = copy.deepcopy(self.native_item)
+        for field, value in (("id", "another-tool"), ("type", "agentMessage"), ("command", "/bin/zsh -lc false")):
+            with self.subTest(field=field):
+                self.native_item = copy.deepcopy(original_item)
+                self.native_item["item"][field] = value
+                self.assertIsNone(self.verify())
+        self.native_item = original_item
+        self.native_item["turnId"] = "another-turn"
+        self.assertIsNone(self.verify())
+        self.native_item = copy.deepcopy(original_item)
+        self.native_item["turnId"] = "task-turn"
+        self.job["receipts"][0]["id"] = "forged"
+        self.job["trigger_receipt_id"] = "forged"
+        self.save()
+        self.assertIsNone(self.verify())
+
+    def test_prefinal_native_item_pagination_and_bounded_missing_context(self):
+        client = self.client([{"data": [], "nextCursor": "page-two"}, {"data": [self.native_item], "nextCursor": None}])
+        self.assertIsNotNone(self.verify(client))
+        self.assertEqual(client.request.call_args_list[-1].args[1]["cursor"], "page-two")
+        self.rollout.write_bytes(self.rollout.read_bytes() + b"\n" * 4_194_305)
+        self.assertIsNone(self.verify())
+
+    def test_write_still_requires_matching_knowledge_digest(self):
+        note = self.knowledge / "topics/synthetic.md"
+        note.write_text("Verified synthetic knowledge.\n")
+        self.job.update(state="applied", write_state="local_saved",
+                        plans=[{"topic": "topics/synthetic.md", "after_sha256": sha(note.read_bytes())}])
+        self.save()
+        self.assertEqual(self.verify()["outcome"], "write")
+        note.write_text("Changed outside the maintenance job.\n")
+        self.assertIsNone(self.verify())
 
 
 if __name__ == "__main__":
