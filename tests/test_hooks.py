@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from akf.hooks import handle_event, maintenance_instructions
 
@@ -448,6 +449,64 @@ class RealEngineHookIntegrationTests(unittest.TestCase):
         self.assertEqual(job["trigger_marker"], marker)
         self.assertEqual(job["trigger_tool_use_id"], "new-read")
         self.assertEqual(job["trigger_receipt_id"], job["receipts"][1]["id"])
+
+    def test_runtime_change_refreshes_hint_once_and_keeps_all_task_receipts(self):
+        from akf.engine import Engine
+
+        old_runtime = self.config.parent / "versions/old-package/akf/engine.py"
+        new_runtime = self.config.parent / "versions/new-package/akf/engine.py"
+        fields = dict(tool_name="Bash", tool_input={}, tool_response={})
+        with patch("akf.engine.__file__", str(old_runtime)):
+            first = self.dispatch("PostToolUse", tool_use_id="before-upgrade", **fields)
+            old_marker = first["hookSpecificOutput"]["additionalContext"].splitlines()[0]
+            self.assertEqual(self.dispatch("PostToolUse", tool_use_id="before-later", **fields), {})
+        with patch("akf.engine.__file__", str(new_runtime)):
+            self.assertEqual(self.dispatch("PostToolUse", tool_use_id="before-upgrade", **fields), {})
+            refreshed = self.dispatch("PostToolUse", tool_use_id="after-upgrade", **fields)
+            self.assertIn("hookSpecificOutput", refreshed, "A new runtime must issue its own prefinal hint")
+            marker = refreshed["hookSpecificOutput"]["additionalContext"].splitlines()[0]
+            self.assertNotEqual(marker, old_marker)
+            self.assertEqual(self.dispatch("PostToolUse", tool_use_id="after-later", **fields), {})
+            engine = Engine(self.config)
+            try:
+                trigger = engine._get("turn", "session:ordinary")["maintenance_trigger"]
+                self.assertEqual(trigger["runtime"], str(new_runtime.parent.resolve()))
+                job = engine.prepare_maintenance("session", "ordinary")
+                self.assertEqual(job["trigger_marker"], marker)
+                self.assertEqual(job["trigger_tool_use_id"], "after-upgrade")
+                self.assertEqual([r["tool_use_id"] for r in job["receipts"]],
+                                 ["before-upgrade", "before-later", "after-upgrade", "after-later"])
+                self.assertEqual(engine.submit(job["id"], {"status": "no_change", "updates": []})["state"], "no_change")
+            finally:
+                engine.db.close()
+        with patch("akf.engine.__file__", str(old_runtime)):
+            self.assertEqual(self.dispatch("PostToolUse", tool_use_id="maintenance-late", **fields), {})
+        self.assertEqual(len(self.state_rows("receipt")), 4)
+        self.assertEqual(self.dispatch("Stop", stop_hook_active=False), {})
+        self.assertEqual(len(self.state_rows("job")), 1)
+        self.assertEqual(list(self.knowledge.iterdir()), [])
+
+    def test_legacy_trigger_without_runtime_refreshes_only_on_a_new_receipt(self):
+        from akf.engine import Engine
+
+        fields = dict(tool_name="Bash", tool_input={}, tool_response={})
+        first = self.dispatch("PostToolUse", tool_use_id="legacy-read", **fields)
+        old_marker = first["hookSpecificOutput"]["additionalContext"].splitlines()[0]
+        engine = Engine(self.config)
+        try:
+            turn = engine._get("turn", "session:ordinary")
+            turn["maintenance_trigger"].pop("runtime", None)
+            engine._put("turn", "session:ordinary", turn)
+        finally:
+            engine.db.close()
+        self.assertEqual(self.dispatch("PostToolUse", tool_use_id="legacy-read", **fields), {})
+        refreshed = self.dispatch("PostToolUse", tool_use_id="fresh-read", **fields)
+        self.assertIn("hookSpecificOutput", refreshed, "A legacy trigger needs a fresh runtime-bound hint")
+        marker = refreshed["hookSpecificOutput"]["additionalContext"].splitlines()[0]
+        self.assertNotEqual(marker, old_marker)
+        self.assertEqual(self.dispatch("PostToolUse", tool_use_id="same-package-later", **fields), {})
+        self.assertEqual(len(self.state_rows("receipt")), 3)
+        self.assertEqual(self.state_rows("job"), [])
 
     def test_interrupt_before_first_stop_retains_failure_without_new_job(self):
         self.dispatch("UserPromptSubmit", prompt="Perform an ordinary synthetic task.")

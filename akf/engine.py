@@ -396,12 +396,13 @@ class Engine:
                     if key in response
                 }
         self._put("receipt", receipt_id, receipt)
-        first_hint = prefinal_hint and not turn.get("maintenance_trigger")
+        runtime = str(Path(__file__).resolve().parent)
+        first_hint = prefinal_hint and turn.get("maintenance_trigger", {}).get("runtime") != runtime
         result = {"state": "recorded", "receipt_id": receipt_id, "exit_code": exit_code,
                   "first_receipt": first_hint}
         if first_hint:
             trigger = {"receipt_id": receipt_id, "marker": "[AKF-PREFINAL:" + uuid.uuid4().hex + "]",
-                       "tool_use_id": tool_use_id, "event": "PostToolUse"}
+                       "tool_use_id": tool_use_id, "event": "PostToolUse", "runtime": runtime}
             turn["maintenance_trigger"] = trigger
             self._put("turn", key, turn)
             result["trigger_marker"] = trigger["marker"]
