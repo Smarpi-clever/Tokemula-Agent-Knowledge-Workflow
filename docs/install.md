@@ -81,6 +81,8 @@ akf --config /path/to/retained-config.json status
 
 再次运行安装器会识别已有安装并保留用户数据。升级使用已经校验的解压包；检查预览后执行 `akf upgrade --from /path/to/unpacked-package`。
 
+升级后，当前聊天的下一条工具活动会刷新新包的内部维护提示。原生启用验证继续核对升级后的实际维护记录。
+
 旧直接 Hooks 可通过 `akf setup --migrate-config /path/to/old-config.json` 明确迁移。先预览再应用，只替换精确匹配的本工具 handler。旧配置和 state 保留，归属不明的条目供人工处理。
 
 向导新建配置默认关闭整个项目内容快照。旧配置保持原有行为；升级后通过设置向导检查实际读取范围，详见[隐私说明](privacy.md)。
