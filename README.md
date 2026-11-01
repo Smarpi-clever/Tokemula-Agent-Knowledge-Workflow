@@ -1,5 +1,7 @@
 # Tokemula Agent Knowledge Workflow
 
+中文 | [English](README.en.md)
+
 Tokemula Agent Knowledge Workflow（命令为 `akf`）让 Codex 在完成普通任务后，维护有来源的 Markdown 项目知识。它复用当前会话的 Agent、模型和权限，不需要额外的模型 API、Provider 或凭据。
 
 CLI 是主要安装入口，可选 Codex 插件提供相同的设置向导。知识库可以是普通 Markdown 目录，也可以是 Obsidian Vault。
