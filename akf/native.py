@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import time
 
+from . import __version__
 from .install import InstallError
 
 
@@ -45,7 +46,7 @@ class NativeClient:
                       for line in headers.split(b"\r\n")[1:] if b":" in line}
             if not headers.startswith(b"HTTP/1.1 101 ") or fields.get(b"sec-websocket-accept") != accept:
                 raise InstallError("当前 Codex 本地连接不可用。请在原生界面确认。")
-            self.request("initialize", {"clientInfo": {"name": "akf-installer", "version": "0.2.0"}})
+            self.request("initialize", {"clientInfo": {"name": "akf-installer", "version": __version__}})
             self.send({"method": "initialized"})
         except BaseException:
             self.__exit__(None, None, None)

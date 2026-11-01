@@ -103,7 +103,7 @@ akf --config /path/to/retained-config.json status
 
 CLI 独立工作。可选插件通过同一引擎和向导完成设置，使用默认状态目录 `~/Library/Application Support/AgentKnowledgeWorkflow/`。自定义 `AKF_HOME` 的安装请选择 `direct` 模式。
 
-从同一 Release 下载 `TokemulaAgentKnowledgeWorkflow-0.2.0-codex-plugin.zip`，核对摘要并解压。注册其中的 marketplace 目录：
+从同一 Release 下载 `TokemulaAgentKnowledgeWorkflow-0.2.1-codex-plugin.zip`，核对摘要并解压。注册其中的 marketplace 目录：
 
 ```sh
 codex plugin marketplace add /path/to/agent-knowledge-workflow-marketplace
