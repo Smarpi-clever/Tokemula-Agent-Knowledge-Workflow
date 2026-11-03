@@ -44,6 +44,7 @@ class ReleasePackageTests(unittest.TestCase):
             "docs/install.md": "# Synthetic installation fixture\n",
             "docs/reproducible-build.md": "# Synthetic build fixture\n",
             "README.md": "# Synthetic package fixture\n",
+            "README.en.md": "# Synthetic English package fixture\n",
             "LICENSE": "Synthetic license fixture for packaging tests.\n",
             "SECURITY.md": "# Synthetic security fixture\n",
             "CHANGELOG.md": "# Synthetic changelog fixture\n",
@@ -132,6 +133,7 @@ class ReleasePackageTests(unittest.TestCase):
             self.assertFalse(manifest["private_candidate"])
             self.assertIn("LICENSE", manifest["files"])
             self.assertIn("README.md", manifest["files"])
+            self.assertIn("README.en.md", manifest["files"])
             self.assertIn("SECURITY.md", manifest["files"])
             self.assertIn("synthetic-knowledge/topics/project-behavior.md", manifest["files"])
             self.assertNotIn(".env", manifest["files"])
