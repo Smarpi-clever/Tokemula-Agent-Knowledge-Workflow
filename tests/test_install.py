@@ -179,6 +179,152 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual((self.project / ".codex/hooks.json").read_bytes(), before)
         self.assertEqual(len(self.manager.registry()["mappings"]), 1)
 
+    def test_default_knowledge_preview_apply_and_data_retention(self):
+        args = ("setup", "--non-interactive", "--project", str(self.project), "--sync", "local",
+                "--hook-mode", "direct", "--authorize-update", "no", "--authorize-commit", "no",
+                "--authorize-push", "no")
+        suffix = sha(str(self.project).encode("utf-8"))[:12]
+        knowledge = self.home / "Agent-Knowledge" / f"{self.project.name}-{suffix}"
+        result = self.command(*args)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        preview = json.loads(result.stdout)["preview"]
+        self.assertEqual(preview["knowledge_write"], str(knowledge))
+        self.assertEqual(preview["project_read"], str(self.project))
+        self.assertFalse((self.home / "Agent-Knowledge").exists())
+        self.assertFalse(Path(preview["state_directory"]).exists())
+        self.assertEqual(self.manager.registry()["mappings"], {})
+
+        result = self.command(*args, "--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        applied = json.loads(result.stdout)
+        mapping = self.manager.select(self.project)
+        self.assertEqual(mapping["knowledge_root"], str(knowledge))
+        self.assertTrue(knowledge.is_dir())
+        self.assertFalse(self.manager.config(mapping)["enabled"])
+        self.assertFalse(Path(preview["state_directory"]).exists())
+        result = self.command(*args, "--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["state"], "no_op")
+        note = knowledge / "human.md"
+        note.write_text("Keep this human note.\n")
+        self.assertEqual(self.manager.rollback(applied["transaction"])["state"], "rolled_back")
+        self.assertEqual(note.read_text(), "Keep this human note.\n")
+        result = self.command(*args, "--apply")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.manager.uninstall()
+        self.assertEqual(note.read_text(), "Keep this human note.\n")
+
+    def test_default_knowledge_distinguishes_same_named_projects(self):
+        paths = []
+        for parent in ("one", "two", "one"):
+            project = self.root / parent / "same project"
+            project.mkdir(parents=True, exist_ok=True)
+            result = self.command("setup", "--non-interactive", "--project", str(project / "."),
+                                  "--sync", "local", "--hook-mode", "direct", "--authorize-update", "no",
+                                  "--authorize-commit", "no", "--authorize-push", "no")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            knowledge = Path(json.loads(result.stdout)["preview"]["knowledge_write"])
+            self.assertEqual(knowledge.parent, self.home / "Agent-Knowledge")
+            self.assertRegex(knowledge.name, r"^same project-[a-f0-9]{12}$")
+            paths.append(knowledge)
+        self.assertEqual(paths[0], paths[2])
+        self.assertNotEqual(paths[0], paths[1])
+        self.assertFalse((self.home / "Agent-Knowledge").exists())
+
+    def test_cli_and_plugin_reuse_existing_custom_knowledge(self):
+        for mode in ("direct", "plugin"):
+            with self.subTest(mode=mode):
+                args = ("setup", "--non-interactive", "--project", str(self.project), "--sync", "local",
+                        "--hook-mode", mode, "--authorize-update", "no", "--authorize-commit", "no",
+                        "--authorize-push", "no", "--apply")
+                custom = self.knowledge if mode == "direct" else self.home / "custom notes"
+                result = self.command(*args, "--knowledge", str(custom))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                identity = json.loads(result.stdout)["mapping"]
+                result = self.command(*args)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(result.stdout)["state"], "no_op")
+                self.assertEqual(json.loads(result.stdout)["mapping"], identity)
+                self.assertEqual(self.manager.select(self.project)["knowledge_root"], str(custom))
+        self.assertFalse((self.home / "Agent-Knowledge").exists())
+        self.assertEqual(self.note.read_text(), "人工笔记保持完整。\n")
+
+    def test_plugin_package_setup_uses_default_knowledge_and_exposes_it_to_agent(self):
+        from akf.engine import Engine
+        from akf.hooks import handle_event
+        result = subprocess.run(["/bin/sh", str(self.plugin_package / "Install.command"), "--non-interactive",
+                                 "--apply", "--project", str(self.project), "--sync", "local", "--hook-mode", "plugin",
+                                 "--authorize-update", "yes", "--authorize-commit", "no", "--authorize-push", "no"],
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        applied = json.loads(result.stdout.splitlines()[-1])
+        self.assertIn("知识库和状态目录", applied["next_step"])
+        mapping = self.manager.select(self.project)
+        knowledge = Path(mapping["knowledge_root"])
+        self.assertEqual(knowledge.parent, self.home / "Agent-Knowledge")
+        self.assertFalse((self.project / ".codex/hooks.json").exists())
+        note = knowledge / "topics/limits.md"
+        note.parent.mkdir()
+        note.write_text("# Limits\n\nKeep this human introduction.\n")
+        engine = Engine(mapping["config_path"])
+        try:
+            result = handle_event({"hook_event_name": "SessionStart", "cwd": str(self.project),
+                                   "session_id": "default-knowledge"}, engine)
+            self.assertEqual(self.ownership_update(engine, 15)["state"], "local_saved")
+        finally:
+            engine.db.close()
+        context = result["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(str(knowledge), context)
+        self.assertIn("context", context)
+        self.assertIn("Keep this human introduction.", note.read_text())
+        self.assertIn("The limit is 15.", note.read_text())
+
+    def test_interactive_knowledge_default_custom_and_discovered_choices(self):
+        from akf.cli import main
+        env = {"os": "synthetic", "os_version": "1", "architecture": "synthetic", "python": "3.11",
+               "git": "installed", "codex_cli": "installed", "desktop": None}
+        suffix = sha(str(self.project).encode("utf-8"))[:12]
+        previous = self.home / "Agent-Knowledge" / f"{self.project.name}-{suffix}"
+        for choice, expected in (("", previous), ("~/custom notes", self.home / "custom notes"), ("1", self.knowledge)):
+            with self.subTest(choice=choice), patch("sys.stdin.isatty", return_value=True), \
+                 patch("akf.setup_cli.environment", return_value=env), \
+                 patch("akf.setup_cli.discover_vaults", return_value=[str(self.knowledge)]), \
+                 patch("builtins.input", side_effect=[choice, "yes"]) as prompt, \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main(["setup", "--project", str(self.project), "--sync", "local", "--hook-mode", "direct",
+                                       "--authorize-update", "no", "--authorize-commit", "no", "--authorize-push", "no"]), 0)
+                mapping = self.manager.select(self.project)
+                self.assertEqual(mapping["knowledge_root"], str(expected))
+                self.assertIn("知识库目录（回车使用默认", prompt.call_args_list[0].args[0])
+                self.assertIn(str(previous), prompt.call_args_list[0].args[0])
+                previous = expected
+
+    def test_default_knowledge_creation_failure_recovers(self):
+        from akf.cli import main
+        import akf.install as service
+        before = self.manager.registry_path.read_bytes()
+        restore = service.restore
+        failed = False
+
+        def interrupted(path, value):
+            nonlocal failed
+            if path == self.manager.registry_path and not failed:
+                failed = True
+                raise KeyboardInterrupt()
+            return restore(path, value)
+
+        with patch("akf.setup_cli.environment", return_value={"git": "installed", "codex_cli": "installed"}), \
+             patch("akf.install.restore", side_effect=interrupted), contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["setup", "--non-interactive", "--apply", "--project", str(self.project),
+                                   "--sync", "local", "--hook-mode", "direct", "--authorize-update", "no",
+                                   "--authorize-commit", "no", "--authorize-push", "no"]), 130)
+        self.assertTrue(failed)
+        self.assertEqual(self.manager.registry_path.read_bytes(), before)
+        self.assertFalse((self.home / "Agent-Knowledge").exists())
+        self.assertFalse((self.project / ".codex/hooks.json").exists())
+        self.assertEqual(self.note.read_text(), "人工笔记保持完整。\n")
+
     def test_preview_is_readonly_and_apply_rechecks_snapshot(self):
         result = self.setup_mapping(apply=False)
         self.assertEqual(result["state"], "preview")
