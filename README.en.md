@@ -29,6 +29,8 @@ Installation and automatic maintenance activation are shown separately:
 
 For full instructions, the optional plugin, and recovery steps, see [installation and usage](docs/install.md).
 
+New projects default to `~/Agent-Knowledge/<project-name>-<short-id>/`. Press Enter in the wizard to accept, or choose a custom location or an existing Obsidian vault. Repeated setup reuses the existing binding. Hooks provide the agent with the knowledge entry point, so you and the agent use the same Markdown files.
+
 ## Everyday use
 
 Work normally in a configured project. The agent updates relevant topics based on actual results while preserving sources and history. It creates no notes when there are no new lasting facts. Items with insufficient sources or conflicts with manual edits remain pending for review.

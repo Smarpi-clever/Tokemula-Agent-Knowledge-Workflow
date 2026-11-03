@@ -770,7 +770,8 @@ class Manager:
         if expected is not None and expected != preview_id:
             raise InstallError("预览后文件已变化。请重新运行 setup。")
         return {**self.transaction(changes, "setup", [knowledge]), "mapping": identity, "ownership": ownership,
-                "next_step": "在 Codex 原生 /hooks 中审查并信任；执行普通任务后运行 akf doctor --verify。"}
+                "next_step": "在 Codex 原生 /hooks 中审查并信任；执行普通任务后运行 akf doctor --verify。" +
+                             ("如出现原生写入审批，请批准预览中的知识库和状态目录。" if grants["update"] else "")}
 
     def control(self, identity, action):
         registry = self.registry()

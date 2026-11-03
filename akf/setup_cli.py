@@ -19,7 +19,7 @@ COMMANDS = {"setup", "doctor", "upgrade", "uninstall", "rollback", "managed-hook
 def add_commands(sub):
     setup = sub.add_parser("setup", help="选择项目、知识库和权限")
     setup.add_argument("--project")
-    setup.add_argument("--knowledge")
+    setup.add_argument("--knowledge", help="自定义知识库目录；省略时沿用已有绑定或使用 ~/Agent-Knowledge/<项目名>-<短ID>/")
     setup.add_argument("--discover-in", action="append", default=[])
     setup.add_argument("--sync", choices=["local", "commit", "push"])
     setup.add_argument("--hook-mode", choices=["direct", "plugin"])
@@ -52,7 +52,7 @@ def setup(args, manager):
     env = environment()
     if interactive:
         print(f"环境：{env['os']} {env['os_version']} / {env['architecture']}；Python {env['python']}；Git {'可用' if env['git'] else '缺失'}；Codex {'已检测' if env['codex_cli'] or env['desktop'] else '缺失'}", file=sys.stderr)
-    missing = [key for key in ("project", "knowledge", "sync", "hook_mode", "authorize_update",
+    missing = [key for key in ("project", "sync", "hook_mode", "authorize_update",
                               "authorize_commit", "authorize_push") if getattr(args, key) is None]
     if missing and not interactive:
         raise InstallError("非交互设置需要明确选择：" + ", ".join("--" + k.replace("_", "-") for k in missing))
@@ -64,10 +64,19 @@ def setup(args, manager):
             if not mapping.get("archived"):
                 print(f"已有项目：{mapping['project_root']}；知识库：{mapping['knowledge_root']}", file=sys.stderr)
         args.project = args.project or ask("项目目录", cwd)
+    default_knowledge = None
+    if not args.knowledge:
+        project = Path(args.project).expanduser().resolve(strict=True)
+        existing = next((m for m in manager.registry()["mappings"].values()
+                         if not m.get("archived") and m["project_root"] == str(project)), None)
+        suffix = sha(str(project).encode("utf-8"))[:12]
+        default_knowledge = (existing["knowledge_root"] if existing else
+                             str(Path.home() / "Agent-Knowledge" / f"{project.name or 'project'}-{suffix}"))
+    if interactive:
         found = discover_vaults(args.discover_in)
         for index, path in enumerate(found, 1):
             print(f"{index}. {path}", file=sys.stderr)
-        choice = args.knowledge or ask("知识库目录（可输入上方序号或新目录）")
+        choice = args.knowledge or ask("知识库目录（回车使用默认，可输入序号或自定义目录）", default_knowledge)
         args.knowledge = found[int(choice) - 1] if choice and choice.isdigit() and 0 < int(choice) <= len(found) else choice
         if not args.knowledge:
             raise InstallError("尚未选择知识库。重新运行 setup 可继续。")
@@ -77,6 +86,8 @@ def setup(args, manager):
             names = git(Path(args.knowledge), "remote", required=False).splitlines()
             print("知识库远端：" + ", ".join(names), file=sys.stderr)
             args.remote = ask("Git 远端名称", names[0] if len(names) == 1 else None)
+    else:
+        args.knowledge = args.knowledge or default_knowledge
     grants = {}
     for name, label in (("update", "允许自动更新此知识库"), ("commit", "允许自动创建本地 Git 提交"),
                         ("push", "允许向所选远端自动推送")):
