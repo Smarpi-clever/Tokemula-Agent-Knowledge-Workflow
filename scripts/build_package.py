@@ -19,7 +19,7 @@ RUNTIME_FILES = ("Install.command", "plugin.json", "hooks/hooks.json", "skills/s
                  "scripts/python.sh", "scripts/install.py", "scripts/plugin_hook.sh",
                  "scripts/plugin_entry.py", "docs/install.md")
 PUBLIC_FILES = ("README.md", "LICENSE", "SECURITY.md", "CHANGELOG.md")
-OPTIONAL_FILES = ("CONTRIBUTING.md", "docs/privacy.md", "docs/compatibility.md", "docs/dependencies.md",
+OPTIONAL_FILES = ("README.en.md", "CONTRIBUTING.md", "docs/privacy.md", "docs/compatibility.md", "docs/dependencies.md",
                   "docs/reproducible-build.md", "examples/README.md", "examples/config.json",
                   "examples/hooks.json", "synthetic-knowledge/topics/project-behavior.md")
 
