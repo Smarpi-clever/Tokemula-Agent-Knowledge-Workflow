@@ -11,7 +11,7 @@ description: 安装或设置 Tokemula Agent Knowledge Workflow，选择项目、
 2. 先用自然语言收集项目绝对路径、同步方式 `local|commit|push`、已有 Git 远端名称。知识库可使用默认位置，也可指定自定义绝对路径或已有 Obsidian Vault。新项目默认保存到 `~/Agent-Knowledge/<项目名>-<短ID>/`；已有绑定沿用原路径。具体默认路径由共用设置接口生成。普通 Markdown 不需要 Obsidian。
 3. 分别询问自动知识更新、本地自动提交、远端自动推送；默认均为关闭。每项使用用户的明确选择，通用“继续”不代表授权。
 4. 调用共用设置接口预览。命令参数：`setup --non-interactive --project PROJECT --sync local|commit|push --hook-mode plugin --authorize-update yes|no --authorize-commit yes|no --authorize-push yes|no`。用户自定义位置时增加 `--knowledge KNOWLEDGE`；需要远端时增加 `--remote NAME`。安装包启动器自带 `setup`，调用 `scripts/install.py` 时省略该词。所有路径按 shell 参数单独引用。
-5. 预览为 `no_op` 时沿用现有设置并结束。其余情况用简短中文展示项目读取范围、返回的 `knowledge_write` 知识库绝对路径、`state_directory` 状态目录、Hook 来源和提交/网络行为。用户确认此预览后，用相同选择添加 `--apply`，并用 `--knowledge` 明确传入预览中的知识库路径。不得触碰其他 Hooks、笔记、Git 改动、信任数据库或审批策略。
+5. 预览为 `no_op` 时沿用现有设置，继续下方的信任和启用检查。其余情况用简短中文展示项目读取范围、返回的 `knowledge_write` 知识库绝对路径、`state_directory` 状态目录、Hook 来源和提交/网络行为。用户确认此预览后，用相同选择添加 `--apply`，并用 `--knowledge` 明确传入预览中的知识库路径。不得触碰其他 Hooks、笔记、Git 改动、信任数据库或审批策略。
 6. 引导用户在 Codex 原生 `/hooks` 审查和信任这五个 Hook。安装插件和运行设置都不授予信任。如原生写入审批阻塞维护，请用户在当前原生流程批准上述知识库和状态目录的限定写入，保持项目源码只读。新聊天通过 SessionStart Hook 获得绑定路径和按需读取入口。
 7. 执行用户允许的普通任务，再调用 `akf doctor --verify`。分别报告 Installed、Configured、Trusted、Enabled 和两项同步状态。实际验证前显示“待验证”。
 
