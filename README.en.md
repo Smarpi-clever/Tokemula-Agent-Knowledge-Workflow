@@ -8,7 +8,7 @@ The CLI is the primary installation entry point. An optional Codex plugin provid
 
 ## Installation
 
-The currently verified platform is macOS arm64. Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md).
+The currently verified platform is macOS arm64. Version 0.3.0 has completed automatic maintenance and new-session recall through direct Hooks in Codex CLI 0.166.0. Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md) for client, integration, and upgrade coverage.
 
 1. Download the macOS package from [GitHub Releases](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/releases) and verify its checksum against `SHA256SUMS` from the same release.
 2. Extract the package and double-click `Install.command`. Choose your project, knowledge base, and sync mode, then review the proposed changes.
@@ -74,7 +74,7 @@ Review shows each candidate's evidence gaps, conflicts, and proposed change. Rev
 - Your knowledge base is stored separately from the program, configuration, and state directories.
 - Automatic updates write only to tool-managed blocks in `topics/*.md`, preserving manually written content, indexes, and existing history.
 - New setups use task receipts and explicitly selected file or commit evidence, without creating a content snapshot of the entire project.
-- Test conclusions require trusted execution receipts. Plans, inferences, source state, and deployment state are recorded separately.
+- Test conclusions require trusted execution receipts. When the host provides no structured exit code, test candidates remain pending and file facts are verified independently. Plans, inferences, source state, and deployment state are recorded separately.
 - Automatic commits include only notes owned by this tool. Automatic remote pushes require separate authorization and validate the private knowledge repository binding.
 - Uninstalling preserves notes, configuration, pending items, and recovery materials. Installation, upgrades, and uninstallation support transactional rollback.
 
@@ -92,13 +92,13 @@ make test
 
 Tests use synthetic projects and local Git fixtures. See [examples](examples/README.md) for configuration and Hook templates, and [synthetic-knowledge](synthetic-knowledge/topics/project-behavior.md) for a blank synthetic knowledge topic. Use the wizard for a regular installation.
 
-Run the fixed synthetic corpus and query evaluation with:
+The evaluation uses 15 synthetic topics and 12 fixed queries. Eleven queries contribute to Recall@5 and MRR@5, comparing the fixed v0.2.2 baseline with current retrieval. Run it from the source repository root:
 
 ```sh
 python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
 ```
 
-See [evaluation](evaluation/README.md) for the baseline, scoring rules, and output reports.
+See the [fixed evaluation in the source repository](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/blob/main/evaluation/README.md) for the baseline, scoring rules, and output reports.
 
 See [reproducible builds](docs/reproducible-build.md) for packaging instructions, [CONTRIBUTING.md](CONTRIBUTING.md) for contributions and issue reporting, [dependencies and licenses](docs/dependencies.md) for dependency records, and [CHANGELOG.md](CHANGELOG.md) for release history.
 

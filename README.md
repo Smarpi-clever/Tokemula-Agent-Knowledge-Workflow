@@ -8,7 +8,7 @@ CLI 是主要安装入口，可选 Codex 插件提供相同的设置向导。知
 
 ## 安装
 
-当前已验证的平台为 macOS arm64。需要 Python 3.11+、Git 和 Codex Desktop；原生启用验证还需要 Codex CLI。详见[兼容性矩阵](docs/compatibility.md)。
+当前已验证的平台为 macOS arm64。0.3.0 已在 Codex CLI 0.166.0 的直接 Hooks 接入中完成自动维护和新会话召回。需要 Python 3.11+、Git 和 Codex Desktop；原生启用验证还需要 Codex CLI。客户端、接入方式和升级验证见[兼容性矩阵](docs/compatibility.md)。
 
 1. 从 [GitHub Releases](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/releases) 下载 macOS 安装包，并按同一版本的 `SHA256SUMS` 核对摘要。
 2. 解压后双击 `Install.command`，选择项目、知识库和同步方式，查看改动预览。
@@ -74,7 +74,7 @@ akf review --job JOB_ID --item topics/limits.md:request-limit --action reject
 - 用户知识库与程序、配置和状态目录分开保存。
 - 自动更新只写 `topics/*.md` 的工具托管块，保留人工正文、索引和已有历史。
 - 新设置默认通过任务回执和明确选择的文件或 commit 证据工作，不生成整个项目的内容快照。
-- 测试结论需要可信执行回执；计划、推断、源码状态和部署状态分别记录。
+- 测试结论需要可信执行回执。宿主缺少结构化退出码时，测试候选保留为 pending，文件事实继续独立核验。计划、推断、源码状态和部署状态分别记录。
 - 自动提交只处理本工具拥有的笔记；自动远端推送单独授权，并校验私有知识仓库绑定。
 - 卸载保留笔记、配置、pending 和恢复材料。安装、升级和卸载按事务回滚。
 
@@ -92,7 +92,7 @@ make test
 
 测试使用合成项目与本地 Git fixtures。配置和 Hook 模板见 [examples](examples/README.md)，空白合成知识主题见 [synthetic-knowledge](synthetic-knowledge/topics/project-behavior.md)。普通安装请使用向导。
 
-固定合成语料与查询的效果评测见 [evaluation](evaluation/README.md)：
+效果评测使用 15 个合成主题和 12 条固定查询，其中 11 条纳入 Recall@5、MRR@5，比较固定 v0.2.2 基线与当前检索。语料、评分和复现方法见[源码仓库中的固定评测](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/blob/main/evaluation/README.md)。在源码仓库根目录运行：
 
 ```sh
 python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
