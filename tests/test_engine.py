@@ -75,7 +75,7 @@ class EngineTests(Fixture):
         self.assertIn('The request limit is twelve.', text)
         self.assertEqual(text.count('<!-- akf:request-limit -->'), 1)
 
-    def test_duplicate_submission_and_same_fact_do_not_write(self):
+    def test_duplicate_submission_is_idempotent_and_new_verification_refreshes(self):
         first = self.job()
         candidate = self.candidate(first)
         self.engine.submit(first['id'], candidate)
@@ -83,8 +83,13 @@ class EngineTests(Fixture):
         original = note.read_bytes()
         self.assertEqual(self.engine.submit(first['id'], candidate)['state'], 'local_saved')
         second = self.job()
-        self.assertEqual(self.engine.submit(second['id'], self.candidate(second))['state'], 'no_change')
-        self.assertEqual(note.read_bytes(), original)
+        previous = self.engine._get('fact', 'topics/limits.md:request-limit')
+        self.assertEqual(self.engine.submit(second['id'], self.candidate(second))['state'], 'local_saved')
+        refreshed = self.engine._get('fact', 'topics/limits.md:request-limit')
+        self.assertEqual(refreshed['version_id'], previous['version_id'])
+        self.assertGreater(refreshed['last_verified_at'], previous['last_verified_at'])
+        self.assertEqual(refreshed['history'], [])
+        self.assertEqual(note.read_text().count('The request limit is eight.'), 1)
 
     def test_no_change_and_cancelled_never_write(self):
         job = self.job()

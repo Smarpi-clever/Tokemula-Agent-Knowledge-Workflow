@@ -83,6 +83,63 @@ akf --config /path/to/retained-config.json status
 
 `--config` 优先。高级配置模板见 [examples](../examples/README.md)。
 
+## 先检索，再读取详情
+
+```sh
+akf search --query '中文请求上限 request limit' --limit 5 --budget-bytes 6000
+akf read --path topics/limits.md --start-line 1 --end-line 80 --budget-bytes 6000
+akf --json search --query 'src/limits.py ValueError' --history
+akf context --task '排查请求限流'
+akf index --rebuild
+```
+
+`search` 查询本地标题、正文、源码路径及错误信息。每项结果给出相关片段、来源、事实状态、笔记路径和行号；`read` 按位置继续读取。默认优先展示当前事实，`--history` 纳入已替代版本。人工正文标为人工笔记；托管块被手工修改后，结果提示重新核验。无匹配时返回空的 `results`。
+
+`--limit` 接受 1–100 条结果，默认 5 条。`--budget-bytes` 接受 512–1000000 UTF-8 字节，默认 6000 字节，覆盖结构化 JSON 结果；响应中的 `output_bytes` 给出实际大小，`has_more` 提示还有内容可读取。普通查询通过文件元信息识别变化，只读取新增或改变的笔记；删除文件后同步清除索引。`index --rebuild` 从 Markdown 和事实记录重建派生索引。
+
+`context --task` 使用同一检索入口。SessionStart Hook 继续只提供元信息与按需入口，Agent 按当前任务检索和读取。索引、查询和片段提取在本机执行。
+
+## 查看事实状态与时效
+
+事实状态分为三项：
+
+| 字段 | 值与含义 |
+|---|---|
+| `evidence_status` | `tool_verified` 为已通过工具证据验证，`pending`／`unverified` 为待审候选，`unknown` 为缺少对应信息 |
+| `lifecycle` | `current` 为当前版本，`superseded` 为已替代版本，`candidate` 为候选；人工正文等未绑定版本的内容显示 `unknown` |
+| `review_status` | `clear` 为本次检查未触发复核，`review_required` 为待复核，`unknown` 为信息缺失 |
+
+`review_reasons` 解释复核原因；任务本身的 completed、partial 等评估单独保留。同项目、环境及稳定 `claim_id` 的新有效证据可更新当前事实，旧内容保留历史及替代关系。独立事实使用各自的 `claim_id`。相同内容重新核验时只更新最近核验信息，保留一份内容。
+
+候选可用带时区的 `review_after` 指定复核截止时间，例如 `2026-12-01T00:00:00Z`。当前文件与已记录证据不一致或超过截止时间时，结果提示待复核。固定 commit 的证据保留对应版本的含义；当前工作树变化不会自行替换该历史内容。旧记录缺失的状态显示 `unknown`，缺失的最近核验时间保留为 `null`；后续有效核验可补齐。
+
+## 逐项处理 pending
+
+先查看任务，再选择候选：
+
+```sh
+akf pending
+akf --json status --job JOB_ID
+akf explain --job JOB_ID
+akf review --job JOB_ID --item topics/limits.md:request-limit --action show
+```
+
+`explain` 和 `review` 展示候选内容、目标事实、来源、证据缺口、冲突原因、拟议变化及可执行操作。候选 ID 为 `主题路径:claim_id`，以实际结果中的 ID 为准。
+
+从 `explain` 的 `items[].candidate` 取出完整的单条更新对象，保存为 `update.json`；补充与本任务对应的证据后重新验证：
+
+```sh
+akf review --job JOB_ID --item topics/limits.md:request-limit --action revalidate < update.json
+akf review --job JOB_ID --item topics/limits.md:request-limit --action confirm
+akf review --job JOB_ID --item topics/limits.md:request-limit --action reject
+akf review --job JOB_ID --item topics/limits.md:request-limit --action withdraw
+akf status --job JOB_ID
+```
+
+`revalidate` 仍检查原任务回执、文件或 commit 证据、原笔记摘要和托管块归属。人工修改引起冲突时，保留当前笔记，在新任务中重新读取后提交；原候选继续保留原笔记摘要。`confirm` 记录人工确认，工具核验状态由实际证据决定。测试与执行结论继续要求相应的可信回执。`reject` 拒绝单条候选，`withdraw` 撤回单条候选，两者均保存简短处理记录；同任务中已成功保存的事实保留。
+
+`resume --job ID` 恢复既有写入或同步，`undo --job ID` 按恢复机制撤销工具拥有的变化。完成目标随当前配置确定：仅本地保存时，保存成功且没有遗留候选的任务从 context 待办移除；启用提交或推送时，相关同步问题单独展示。
+
 ## 升级、迁移与回滚
 
 再次运行安装器会识别已有安装并保留用户数据。升级使用已经校验的解压包；检查预览后执行 `akf upgrade --from /path/to/unpacked-package`。
@@ -107,11 +164,17 @@ akf --config /path/to/retained-config.json status
 
 需要处理旧绑定中的任务时，用保留的 `--config` 查看状态，重新核对该绑定的授权和有效期，再按需 `enable` 及 `resume --job ID`。恢复知识任务不会恢复已取消的产品工作。
 
+### 0.3.0 的状态与索引
+
+升级前保留所选配置、`state_dir` 与知识库的副本；在隔离副本上先完成检索、审阅和回退检查。0.3.0 沿用 Markdown 与原事实记录，读取旧字段时保留已知信息，缺失的状态显示 `unknown`。检索索引属于可重建数据，升级后可执行 `akf index --rebuild`。
+
+安装升级返回的事务 ID 用于回滚程序和安装接入。知识写入使用 `undo --job ID` 的恢复记录单独处理；回退到升级前的完整数据状态时，使用升级前保存的知识库和状态副本。先在隔离副本核对，再处理日常使用的绑定。
+
 ## 可选 Codex 插件
 
 CLI 独立工作。可选插件通过同一引擎和向导完成设置，使用默认状态目录 `~/Library/Application Support/AgentKnowledgeWorkflow/`。自定义 `AKF_HOME` 的安装请选择 `direct` 模式。
 
-从同一 Release 下载 `TokemulaAgentKnowledgeWorkflow-0.2.2-codex-plugin.zip`，核对摘要并解压。注册其中的 marketplace 目录：
+从同一 Release 下载 `TokemulaAgentKnowledgeWorkflow-0.3.0-codex-plugin.zip`，核对摘要并解压。注册其中的 marketplace 目录：
 
 ```sh
 codex plugin marketplace add /path/to/agent-knowledge-workflow-marketplace
@@ -130,3 +193,9 @@ codex plugin marketplace remove agent-knowledge-workflow
 插件支持经过验证的手动 marketplace 安装路径。主要分发渠道为 CLI 和 GitHub Release。
 
 原生信任依据：[官方 Hooks 说明](https://learn.chatgpt.com/docs/hooks#review-and-trust-hooks)。插件分发依据：[官方插件说明](https://learn.chatgpt.com/docs/plugins)。产品行为和客户端版本范围见[兼容性矩阵](compatibility.md)。
+
+## Hook 诊断
+
+`akf doctor` 使用独立的只读 Codex stdio 连接查询 Hook 和任务记录，无需先启动 daemon。Hook 已信任与维护已启用分别显示：`Trusted` 来自原生 Hook 状态；`Enabled` 继续要求已有授权和真实任务的维护验证。
+
+执行回执的 `exit_code_state` 会说明退出码是已捕获、缺失、非法或冲突。仅结构化整数退出码参与执行结论验证；缺少可信字段的宿主输出保留为待审证据。

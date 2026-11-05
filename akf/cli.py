@@ -20,9 +20,28 @@ def main(argv=None):
     prepare.add_argument("--turn", required=True)
     context = sub.add_parser("context")
     context.add_argument("--task", default="")
+    for entry in (context, sub.add_parser("search", help="本地检索相关知识片段")):
+        if entry is not context:
+            entry.add_argument("--query", required=True)
+        entry.add_argument("--limit", type=int, default=5)
+        entry.add_argument("--budget-bytes", type=int, default=6000, help="完整 JSON 输出的 UTF-8 字节预算")
+        entry.add_argument("--history", action="store_true", help="包含已替代事实")
+    read = sub.add_parser("read", help="按行读取知识及来源")
+    read.add_argument("--path", required=True)
+    read.add_argument("--start-line", type=int, default=1)
+    read.add_argument("--end-line", type=int)
+    read.add_argument("--budget-bytes", type=int, default=6000)
+    index = sub.add_parser("index", help="更新或重建本地派生索引")
+    index.add_argument("--rebuild", action="store_true")
     status = sub.add_parser("status")
     status.add_argument("--job")
     sub.add_parser("pending")
+    for command in ("review", "explain"):
+        entry = sub.add_parser(command, help="逐项审阅待处理候选" if command == "review" else "解释候选及证据缺口")
+        entry.add_argument("--job", required=True)
+        entry.add_argument("--item", help="topics/name.md:claim-id")
+        if command == "review":
+            entry.add_argument("--action", choices=("show", "revalidate", "reject", "withdraw", "confirm"), default="show")
     obsidian = sub.add_parser("obsidian-check")
     obsidian.add_argument("--topic", required=True)
     search = sub.add_parser("obsidian-search")
@@ -34,6 +53,8 @@ def main(argv=None):
         sub.add_parser(command)
     from . import setup_cli
     setup_cli.add_commands(sub)
+    for name in ("context", "search", "read", "index", "pending", "status", "review", "explain"):
+        sub.choices[name].add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
         if args.command in setup_cli.COMMANDS or (not args.config and args.command in {"status", "pause", "disable", "enable"} and not getattr(args, "job", None)):
@@ -61,7 +82,7 @@ def main(argv=None):
                     manager.config(mapping)
                 if mapping and args.command in {"pause", "disable", "enable"}:
                     result = manager.control(mapping["id"], args.command)
-                elif mapping and (mapping["paused"] or mapping["disabled"] or not manager.registry().get("installed") or mapping.get("archived") and args.command == "hook") and args.command in {"hook", "prepare", "submit", "resume", "undo"}:
+                elif mapping and (mapping["paused"] or mapping["disabled"] or not manager.registry().get("installed") or mapping.get("archived") and args.command == "hook") and args.command in {"hook", "prepare", "submit", "resume", "undo", "review"}:
                     result = {} if args.command == "hook" else {"state": "paused"}
                 else:
                     from .engine import Engine
@@ -70,7 +91,9 @@ def main(argv=None):
                         result = business(args, engine)
                     finally:
                         engine.db.close()
-        if not args.json and sys.stdout.isatty() and (args.command in setup_cli.COMMANDS - {"managed-hook"} or "states" in result):
+        if not args.json and sys.stdout.isatty() and args.command in {"search", "read", "context", "pending", "review", "explain"}:
+            render(result)
+        elif not args.json and sys.stdout.isatty() and (args.command in setup_cli.COMMANDS - {"managed-hook"} or "states" in result):
             if "states" in result:
                 states = result["states"]
                 print("工具安装：" + ("已完成" if states["Installed"] else "待安装或修复"))
@@ -90,7 +113,9 @@ def main(argv=None):
             if result.get("next_step"):
                 print(result["next_step"])
         else:
-            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            sys.stdout.write(json.dumps(result, ensure_ascii=False, sort_keys=True))
+            if args.command not in {"search", "read", "context"}:
+                sys.stdout.write("\n")
         return 0
     except (WorkflowError, InstallError, ValueError, OSError) as error:
         message = str(error) if isinstance(error, (WorkflowError, InstallError)) else "输入或本地资源不可用，请运行 akf doctor。"
@@ -102,8 +127,59 @@ def main(argv=None):
         return 130
 
 
+def render(result):
+    """Keep terminal summaries readable; --json retains every machine field."""
+    if "results" in result:
+        for item in result["results"]:
+            print(f"{item['path']}:{item.get('start_line') or '?'}  {item['title']}")
+            print("  " + " / ".join(str(item.get(key, "unknown")) for key in
+                                    ("source_origin", "evidence_status", "lifecycle", "review_status")))
+            print("  " + item.get("snippet", ""))
+            for source in item.get("sources", []):
+                print("  来源：" + source.get("path", source.get("id", "unknown")))
+        if not result["results"]:
+            print("无相关结果。" if not result.get("has_more") else "预算内无完整结果；请提高 --budget-bytes。")
+    elif "lines" in result:
+        print(f"{result['path']}  SHA-256 {result['sha256']}")
+        for number, line in enumerate(result["lines"], result["start_line"]):
+            print(f"{number}: {line}")
+        if result.get("next_line"):
+            print(f"继续：--start-line {result['next_line']}")
+    elif "items" in result:
+        print(f"任务 {result['job_id']}：{result['state']}，待处理 {result['pending_count']} 项")
+        import shlex
+        for item in result["items"]:
+            print(f"\n{item['item_id']}  {item['resolution']}  {item['proposed_change']}")
+            print(item["candidate"]["content"])
+            target = item.get("target_fact")
+            if target:
+                print("目标事实：" + target["content"])
+                print("  " + " / ".join(str(target.get(key, "unknown")) for key in
+                                        ("evidence_status", "lifecycle", "review_status")))
+            else:
+                print("目标事实：新增")
+            print("来源：" + json.dumps(item["sources"], ensure_ascii=False))
+            print("证据缺口：" + str(item.get("evidence_gap") or "无"))
+            print("核验要求：" + item["verification_required"])
+            if item.get("conflict_reason"):
+                print("冲突：" + item["conflict_reason"])
+            if item.get("manual_confirmation"):
+                print("人工确认：" + item["manual_confirmation"]["at"])
+            for action in item["actions"]:
+                print("处理：" + shlex.join([*item["review_command"], "--action", action]) +
+                      (" < update.json" if action == "revalidate" else ""))
+    else:
+        for job in result.get("jobs", result.get("pending_jobs", [])):
+            print(f"{job['id']}  {job['state']}  待处理 {job['pending_count']} 项")
+            print("  " + json.dumps(job.get("issues", {}), ensure_ascii=False))
+        for topic in result.get("topics", []):
+            print(topic["path"] + "  " + topic["title"])
+    if result.get("has_more"):
+        print("结果已截短；可提高 --limit 或 --budget-bytes。")
+
+
 def business(args, engine):
-    if args.command in {"hook", "submit"}:
+    if args.command in {"hook", "submit"} or args.command == "review" and args.action == "revalidate":
         raw = sys.stdin.buffer.read(1_048_577)
         if len(raw) > 1_048_576:
             raise WorkflowError("input", "Input exceeds the bounded event size")
@@ -112,7 +188,8 @@ def business(args, engine):
             from .hooks import handle_event
             result = handle_event(payload, engine)
         else:
-            result = engine.submit(args.job, payload)
+            result = (engine.review(args.job, args.action, args.item, payload) if args.command == "review"
+                      else engine.submit(args.job, payload))
     elif args.command == "prepare":
         job = engine.prepare_maintenance(args.session, args.turn)
         if job is None:
@@ -121,11 +198,27 @@ def business(args, engine):
             from .hooks import maintenance_instructions
             result = {"job": job, "instructions": maintenance_instructions(job)}
     elif args.command == "context":
-        result = engine.context(args.task)
+        result = engine.context(args.task, limit=args.limit, budget_bytes=args.budget_bytes, history=args.history)
+    elif args.command in {"search", "read", "index"}:
+        from .retrieval import SearchIndex
+        index = SearchIndex(engine)
+        if args.command == "search":
+            result = index.search(args.query, limit=args.limit, budget_bytes=args.budget_bytes, history=args.history)
+        elif args.command == "read":
+            result = index.read(args.path, args.start_line, args.end_line, args.budget_bytes)
+        elif args.rebuild:
+            result = index.rebuild()
+        else:
+            result = {"topics": index.topics()}
     elif args.command == "status":
         result = engine.status(args.job)
     elif args.command == "pending":
         result = engine.status()
+        result["jobs"] = [job for job in result["jobs"] if not engine.job_complete(engine._get("job", job["id"]))]
+    elif args.command == "explain":
+        result = engine.explain(args.job, args.item)
+    elif args.command == "review":
+        result = engine.review(args.job, args.action, args.item)
     elif args.command in {"obsidian-check", "obsidian-search"}:
         from .obsidian import check_note, search_topics
         result = check_note(engine, args.topic) if args.command == "obsidian-check" else search_topics(engine, args.query)

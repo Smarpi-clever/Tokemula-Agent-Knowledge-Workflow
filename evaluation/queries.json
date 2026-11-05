@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "frozen_at": "2026-11-05",
+  "k": 5,
+  "budget_bytes": 6000,
+  "queries": [
+    {"id": "chinese-body", "query": "托管块局部更新", "relevant": ["topics/20_knowledge.md"], "scenario": "Chinese phrase in body, absent from title"},
+    {"id": "mixed-body", "query": "SQLite 索引重建", "relevant": ["topics/21_storage.md"], "scenario": "Mixed Chinese and English in body"},
+    {"id": "english-body", "query": "exponential backoff jitter", "relevant": ["topics/22_network.md"], "scenario": "English body match, absent from title"},
+    {"id": "source-path", "query": "src/worker/cache.py", "relevant": ["topics/23_cache.md"], "scenario": "Source path in note body"},
+    {"id": "error-message", "query": "EADDRINUSE", "relevant": ["topics/24_listener.md"], "scenario": "Exact error identifier"},
+    {"id": "chinese-title", "query": "知识检索", "relevant": ["topics/25_retrieval.md"], "scenario": "Chinese title, regression control"},
+    {"id": "english-title", "query": "Scheduling", "relevant": ["topics/26_scheduler.md"], "scenario": "English title, regression control"},
+    {"id": "current-fact", "query": "并发上限", "relevant": ["topics/30_limits.md"], "scenario": "Current version of a replaced fact"},
+    {"id": "history-fact", "query": "concurrency limit 8", "history": true, "relevant": ["topics/30_limits.md"], "scenario": "Explicit historical lookup"},
+    {"id": "review-required", "query": "重试策略", "relevant": ["topics/31_retry.md"], "scenario": "Source changed after verification"},
+    {"id": "no-match", "query": "量子纠缠风铃 unicorn fluxcapacitor", "relevant": [], "scenario": "No related content"},
+    {"id": "human-edit", "query": "读写锁升级规则", "after_edit": true, "relevant": ["topics/27_editable.md"], "scenario": "Human body edit after an index-warming query"}
+  ]
+}

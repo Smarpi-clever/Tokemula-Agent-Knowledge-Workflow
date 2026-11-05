@@ -45,6 +45,30 @@ akf disable
 
 `pause` 暂停自动维护，`enable` 复用已有有效授权恢复维护。插件详情的 Setup 开关控制设置技能；自动维护由原生 Hooks 设置和 `akf` 控制命令管理。
 
+## 按任务查知识与审阅
+
+先查相关片段，再按返回的路径和行号读取详情：
+
+```sh
+akf search --query '中文请求上限 src/limits.py' --limit 5 --budget-bytes 6000
+akf read --path topics/limits.md --start-line 1 --end-line 80 --budget-bytes 6000
+akf context --task '排查 request limit 错误'
+akf search --query '请求上限' --history
+akf index --rebuild
+```
+
+检索覆盖标题、正文、源码路径和错误信息，支持中文、英文及混合查询。结果区分人工笔记、工具核验事实和已替代历史；文件变化、人工修改托管块或明确到期规则会提示复核。`--budget-bytes` 以 UTF-8 字节限制结构化结果，便于 Agent 控制上下文；空结果返回 `results: []`。本地 SQLite 索引会跟随笔记修改和删除更新，可随时重建。
+
+```sh
+akf pending
+akf explain --job JOB_ID
+akf review --job JOB_ID --item topics/limits.md:request-limit --action show
+akf review --job JOB_ID --item topics/limits.md:request-limit --action revalidate < update.json
+akf review --job JOB_ID --item topics/limits.md:request-limit --action reject
+```
+
+审阅逐项显示证据缺口、冲突和拟议变化。重新验证复用原有证据与写入检查；同任务中已保存的事实保持原状。`--json` 放在子命令前，供脚本读取。完整审阅、事实时效和升级回退步骤见[安装与使用](docs/install.md)。
+
 ## 数据与权限
 
 - 用户知识库与程序、配置和状态目录分开保存。
@@ -67,6 +91,12 @@ make test
 ```
 
 测试使用合成项目与本地 Git fixtures。配置和 Hook 模板见 [examples](examples/README.md)，空白合成知识主题见 [synthetic-knowledge](synthetic-knowledge/topics/project-behavior.md)。普通安装请使用向导。
+
+固定合成语料与查询的效果评测见 [evaluation](evaluation/README.md)：
+
+```sh
+python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
+```
 
 打包方法见[可复现构建](docs/reproducible-build.md)。贡献和问题反馈见 [CONTRIBUTING.md](CONTRIBUTING.md)，依赖记录见[依赖与许可证](docs/dependencies.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
