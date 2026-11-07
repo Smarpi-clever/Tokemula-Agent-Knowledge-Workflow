@@ -29,3 +29,16 @@ The CLI ZIP keeps the canonical root `plugin.json`. The native plugin package de
 CI runs syntax checks, isolated tests and two committed-source builds on the `macos-15` hosted runner with Python 3.11. The installed `codex` test fixture answers only `--version`; all other operations fail. This exercises installer dependency detection without credentials, an account connection or native Hook execution. Native Desktop trust and real task acceptance are tracked separately from these synthetic checks.
 
 CI uses the [GitHub-hosted macOS runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) and pinned releases of [checkout](https://github.com/actions/checkout/releases/tag/v7.0.1) and [setup-python](https://github.com/actions/setup-python/releases/tag/v7.0.0), with read-only repository permission and credential persistence disabled.
+
+## v0.3.0 local acceptance and evaluation
+
+Keep candidate evidence and packages under `.local/v0.3.0/`. The fixed synthetic evaluation uses the baseline commit recorded in `evaluation/README.md`:
+
+```sh
+python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
+python3 -B scripts/build_package.py --output .local/v0.3.0/packages
+```
+
+The evaluation writes `report.json` and `report.md`, recording Recall@5, MRR@5, state-handling checks, UTF-8 output bytes, and local query latency. The corpus, queries, and scoring rules are versioned in `evaluation/`; runtime indexes and reports stay in `.local/`.
+
+Before using a candidate on a daily project, test an isolated copy of its configuration, state directory, and knowledge base. Exercise search/read/update/search, pending review, index rebuild, upgrade from the baseline, and installer rollback. The installer transaction restores program and integration changes; knowledge-write recovery uses the corresponding job's `undo` records. A full pre-upgrade data restore uses the saved knowledge and state copies. See [installation and usage](install.md).

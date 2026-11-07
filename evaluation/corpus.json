@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "identity": "akf-retrieval-synthetic-2026-11-05",
+  "manual_topics": [
+    {"path": "topics/00_alpha.md", "text": "# Alpha\n\nThe sample project exports a local command line entrypoint.\n"},
+    {"path": "topics/01_bravo.md", "text": "# Bravo\n\nRelease archives contain public runtime files and license notices.\n"},
+    {"path": "topics/02_charlie.md", "text": "# Charlie\n\nThe synthetic package uses a standard library configuration reader.\n"},
+    {"path": "topics/03_delta.md", "text": "# Delta\n\nThe example service starts on a loopback address.\n"},
+    {"path": "topics/04_echo.md", "text": "# Echo\n\nUse a disposable workspace for integration fixtures.\n"},
+    {"path": "topics/20_knowledge.md", "text": "# Note ownership\n\n自动维护采用托管块局部更新。人工正文由用户维护，工具保留人工段落。\n"},
+    {"path": "topics/21_storage.md", "text": "# Persistence\n\nSQLite 索引重建从 Markdown 原文读取；索引只是可重新生成的派生数据。\n"},
+    {"path": "topics/22_network.md", "text": "# Transport\n\nThe client uses exponential backoff jitter after a temporary network error.\n"},
+    {"path": "topics/23_cache.md", "text": "# Module map\n\nCache eviction is implemented in src/worker/cache.py, under the local worker package.\n"},
+    {"path": "topics/24_listener.md", "text": "# Socket startup\n\nEADDRINUSE: address already in use. The listener reports the occupied port.\n"},
+    {"path": "topics/25_retrieval.md", "text": "# 知识检索\n\n查询结果带片段、来源和可继续读取的位置。\n"},
+    {"path": "topics/26_scheduler.md", "text": "# Scheduling\n\nTimers run only in the local process.\n"},
+    {"path": "topics/27_editable.md", "text": "# Operator notes\n\nThis note will receive an explicit human edit during the evaluation.\n"}
+  ],
+  "facts": [
+    {
+      "topic": "topics/30_limits.md", "title": "Service capacity", "claim_id": "concurrency-limit",
+      "source_path": "src/capacity.py", "versions": [
+        {"source": "CONCURRENCY_LIMIT = 8\n", "content": "并发上限为 8；concurrency limit 8，适用 synthetic 环境。"},
+        {"source": "CONCURRENCY_LIMIT = 16\n", "content": "并发上限为 16；concurrency limit 16，适用 synthetic 环境。"}
+      ]
+    },
+    {
+      "topic": "topics/31_retry.md", "title": "Retry behavior", "claim_id": "retry-policy",
+      "source_path": "src/retry.py", "versions": [
+        {"source": "RETRIES = 3\n", "content": "重试策略允许最多三次重试，retry policy uses three attempts。"}
+      ],
+      "changed_source_after_verification": "RETRIES = 5\n"
+    }
+  ],
+  "human_edit": {
+    "path": "topics/27_editable.md",
+    "append": "\n读写锁升级规则：维护者在持锁期间只修改当前主题。\n"
+  }
+}

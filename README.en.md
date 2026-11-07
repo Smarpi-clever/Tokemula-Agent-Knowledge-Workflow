@@ -8,7 +8,9 @@ The CLI is the primary installation entry point. An optional Codex plugin provid
 
 ## Installation
 
-The currently verified platform is macOS arm64. Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md).
+The currently verified platform is macOS arm64. Version 0.3.0 has completed same-turn maintenance and new-session knowledge recall through direct Hooks in Codex CLI 0.166.0 and ChatGPT Desktop 26.1029.61003. The same workflows passed through an existing local plugin adapter for configured projects in ChatGPT Desktop 26.1103.32239.
+
+Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md) for client, integration, and upgrade coverage.
 
 1. Download the macOS package from [GitHub Releases](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/releases) and verify its checksum against `SHA256SUMS` from the same release.
 2. Extract the package and double-click `Install.command`. Choose your project, knowledge base, and sync mode, then review the proposed changes.
@@ -45,12 +47,36 @@ akf disable
 
 `pause` pauses automatic maintenance. `enable` resumes it using existing valid authorization. The Setup toggle in the plugin details controls the setup skill. Native Hooks settings and the `akf` control commands manage automatic maintenance.
 
+## Find knowledge and review pending facts
+
+Search for relevant excerpts, then read details at the returned path and line numbers:
+
+```sh
+akf search --query '中文请求上限 src/limits.py' --limit 5 --budget-bytes 6000
+akf read --path topics/limits.md --start-line 1 --end-line 80 --budget-bytes 6000
+akf context --task 'Investigate request limit errors'
+akf search --query 'request limit' --history
+akf index --rebuild
+```
+
+Search covers titles, note bodies, source paths, and error messages in Chinese, English, or mixed queries. Results distinguish manual notes, tool-verified facts, and superseded history. File changes, edits to managed blocks, and explicit expiry rules prompt review. `--budget-bytes` caps structured output in UTF-8 bytes. A query with no matches returns `results: []`. The local SQLite index follows note edits and deletions and can be rebuilt.
+
+```sh
+akf pending
+akf explain --job JOB_ID
+akf review --job JOB_ID --item topics/limits.md:request-limit --action show
+akf review --job JOB_ID --item topics/limits.md:request-limit --action revalidate < update.json
+akf review --job JOB_ID --item topics/limits.md:request-limit --action reject
+```
+
+Review shows each candidate's evidence gaps, conflicts, and proposed change. Revalidation uses the existing evidence and write checks, preserving facts already saved in the same job. Put `--json` before the subcommand for scripts. See [installation and usage](docs/install.md) for review, fact freshness, and upgrade/rollback steps.
+
 ## Data and permissions
 
 - Your knowledge base is stored separately from the program, configuration, and state directories.
 - Automatic updates write only to tool-managed blocks in `topics/*.md`, preserving manually written content, indexes, and existing history.
 - New setups use task receipts and explicitly selected file or commit evidence, without creating a content snapshot of the entire project.
-- Test conclusions require trusted execution receipts. Plans, inferences, source state, and deployment state are recorded separately.
+- Test conclusions require trusted execution receipts. When the host provides no structured exit code, test candidates remain pending and file facts are verified independently. Plans, inferences, source state, and deployment state are recorded separately.
 - Automatic commits include only notes owned by this tool. Automatic remote pushes require separate authorization and validate the private knowledge repository binding.
 - Uninstalling preserves notes, configuration, pending items, and recovery materials. Installation, upgrades, and uninstallation support transactional rollback.
 
@@ -67,6 +93,14 @@ make test
 ```
 
 Tests use synthetic projects and local Git fixtures. See [examples](examples/README.md) for configuration and Hook templates, and [synthetic-knowledge](synthetic-knowledge/topics/project-behavior.md) for a blank synthetic knowledge topic. Use the wizard for a regular installation.
+
+The evaluation uses 15 synthetic topics and 12 fixed queries. Eleven queries contribute to Recall@5 and MRR@5, comparing the fixed v0.2.2 baseline with current retrieval. Run it from the source repository root:
+
+```sh
+python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
+```
+
+See the [fixed evaluation in the source repository](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/blob/main/evaluation/README.md) for the baseline, scoring rules, and output reports.
 
 See [reproducible builds](docs/reproducible-build.md) for packaging instructions, [CONTRIBUTING.md](CONTRIBUTING.md) for contributions and issue reporting, [dependencies and licenses](docs/dependencies.md) for dependency records, and [CHANGELOG.md](CHANGELOG.md) for release history.
 

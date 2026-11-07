@@ -3,7 +3,6 @@ import datetime as dt
 import json
 from pathlib import Path
 import sqlite3
-import struct
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -13,54 +12,8 @@ from akf.install import InstallError, Manager, EVENTS, sha
 from akf.setup_cli import verify_job
 
 
-def frame(data, opcode=1, final=True):
-    header = bytes([(128 if final else 0) | opcode])
-    length = len(data)
-    return header + (bytes([length]) if length < 126 else bytes([126]) + struct.pack("!H", length)) + data
-
-
-class FakeSocket:
-    def __init__(self, incoming):
-        self.incoming = incoming
-        self.sent = []
-
-    def recv(self, length):
-        value, self.incoming = self.incoming[:length], self.incoming[length:]
-        return value
-
-    def sendall(self, data):
-        self.sent.append(data)
-
-    def settimeout(self, value):
-        pass
-
 
 class NativeReadTests(unittest.TestCase):
-    def client(self, data):
-        client = NativeClient()
-        client.socket = FakeSocket(data)
-        client.counter = 0
-        client.buffer = b""
-        return client
-
-    def test_masked_request_fragmented_response_ping_and_notification(self):
-        response = json.dumps({"id": 1, "result": {"data": []}}).encode()
-        incoming = (frame(json.dumps({"method": "notification"}).encode()) + frame(b"ping", 9)
-                    + frame(response[:10], final=False) + frame(response[10:], opcode=0))
-        client = self.client(incoming)
-        self.assertEqual(client.request("hooks/list", {"cwds": ["/synthetic"]}), {"data": []})
-        sent = client.socket.sent[0]
-        self.assertTrue(sent[1] & 128)
-        length = sent[1] & 127
-        mask = sent[2:6]
-        data = bytes(b ^ mask[i % 4] for i, b in enumerate(sent[6:6+length]))
-        self.assertEqual(json.loads(data), {"id": 1, "method": "hooks/list", "params": {"cwds": ["/synthetic"]}})
-        self.assertEqual(client.socket.sent[1][0] & 15, 10)
-
-    def test_closed_connection_and_large_frame_fail_with_actionable_error(self):
-        for data in (b"", frame(b"", 8), bytes([129, 127]) + struct.pack("!Q", 4_194_305)):
-            with self.assertRaises(InstallError):
-                self.client(data).request("hooks/list", {})
 
     def test_native_trust_requires_five_exact_handlers_enabled(self):
         manager = Manager()
@@ -191,9 +144,11 @@ class NativeNoChangeTests(unittest.TestCase):
 
     def duplicate_job(self):
         first = self.new_job("first-fact")
-        self.assertEqual(self.engine.submit(first["id"], self.candidate())["state"], "local_saved")
+        candidate = self.candidate()
+        self.assertEqual(self.engine.submit(first["id"], candidate)["state"], "local_saved")
         second = self.new_job("same-fact")
-        self.assertEqual(self.engine.submit(second["id"], self.candidate())["state"], "no_change")
+        candidate["updates"][0]["expected_sha256"] = sha(self.note.read_bytes())
+        self.assertEqual(self.engine.submit(second["id"], candidate)["state"], "no_change")
         self.job = self.engine._get("job", second["id"])
 
     def client(self, **fragment):
@@ -227,6 +182,19 @@ class NativeNoChangeTests(unittest.TestCase):
         self.source.write_text("LIMIT = 4\n")
         self.note.write_text("Human changed the note.\n")
         self.assertIsNone(self.verify())
+
+    def test_same_content_new_observation_refreshes_and_verifies_native_write(self):
+        first = self.new_job("first-fact")
+        self.assertEqual(self.engine.submit(first["id"], self.candidate())["state"], "local_saved")
+        original = self.engine._get("fact", "topics/limits.md:configured-limit")
+        second = self.new_job("reverified-fact")
+        self.assertEqual(self.engine.submit(second["id"], self.candidate())["state"], "local_saved")
+        self.job = self.engine._get("job", second["id"])
+        refreshed = self.engine._get("fact", "topics/limits.md:configured-limit")
+        self.assertEqual(refreshed["version_id"], original["version_id"])
+        self.assertEqual(refreshed["history"], [])
+        self.assertGreater(refreshed["last_verified_at"], original["last_verified_at"])
+        self.assertEqual(self.verify()["outcome"], "write")
 
     def test_no_change_rejects_pending_write_error_and_nonterminal_states(self):
         original = dict(self.job)

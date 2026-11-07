@@ -29,6 +29,11 @@ def maintenance_instructions(job: dict[str, Any]) -> str:
         "no_change using the task goal and objective evidence already available. "
         "Do not treat a subagent's result as completion of the parent task.\n"
         f"First inspect relevant existing topics with: {shlex.join(job['context_command'])}\n"
+        "Add --task with current task keywords to retrieve relevant body, path and error snippets. "
+        "Search/context support --limit and --budget-bytes (UTF-8 JSON bytes); use --history only when tracing old facts. "
+        "Read a matching note with read --path topics/name.md --start-line N --end-line M. "
+        "Treat evidence_status, lifecycle and review_status separately; retain current environment and claim_id. "
+        "Recheck review_required facts against current evidence before using them as current behavior.\n"
         f"Read the prepared, sanitized evidence index with: {shlex.join(job['status_command'])}\n"
         "If partial_evidence is reported, keep unverified claims pending rather than assuming coverage. "
         "If prompt_hash is null, the initial user prompt was not observed. For origin=post_tool_observation, "
@@ -43,6 +48,10 @@ def maintenance_instructions(job: dict[str, Any]) -> str:
         '"claim_type":"file_fact|change|test_result|execution_result|deployment",'
         '"content":"brief verified fact or explicitly Unverified candidate","expected_sha256":"current topic file hash, or null for a new topic",'
         '"observed_at":"ISO-8601 UTC","evidence":[]}]}\n'
+        "Optional review_after is an explicit ISO-8601 recheck deadline. "
+        "Same-content rechecks update last verification; changed facts retain superseded versions. "
+        "Inspect retained candidates with explain --job ID or review --job ID. "
+        "Review can revalidate one item after adding evidence; manual confirmation remains separately recorded.\n"
         "Evidence shapes: file={kind:file,path:project-relative path,sha256:current file hash,"
         "excerpt:actual short excerpt}; commit={kind:commit,commit:full commit SHA,path:relative path,"
         "sha256:blob content SHA-256,excerpt:actual short excerpt}; "
@@ -102,7 +111,10 @@ def handle_event(event: dict[str, Any], engine: Any) -> dict[str, Any]:
                     "Use this entrypoint only when the current task needs project knowledge; "
                     "read relevant topics instead of injecting the whole knowledge base.\n"
                     f"Metadata: {json.dumps(metadata, ensure_ascii=False)}\n"
-                    f"Entrypoint: {shlex.join(command)}"
+                    f"Entrypoint: {shlex.join(command)}\n"
+                    "Add --task 'task keywords' for bounded local retrieval. "
+                    "Use --limit 5 --budget-bytes 6000; read matching notes by path and line range. "
+                    "Current, superseded and review_required facts carry separate labels."
                 ),
             }
         }
