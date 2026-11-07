@@ -40,24 +40,41 @@ def maintenance_instructions(job: dict[str, Any]) -> str:
         "the baseline starts at the first observed tool result, not before the task. Verify the task goal "
         "from the current conversation; if unavailable, report partial instead of task completion. "
         "Current file facts may still be independently verified from matching file hashes and excerpts. "
+        "Missing Bash exit codes are supplemented by bounded native queries when preparing tests or validating selected receipts; "
+        "retain native execution_state and native_evidence.reason when the exit remains unknown. "
         "Automatically form a JSON candidate from the actual task context; do not ask the user "
         "to write it or issue another maintenance instruction. Submit it on stdin to: "
         f"{shlex.join(job['cli_command'])}\n"
         'Candidate shape: {"status":"completed|partial|failed|blocked|cancelled|no_change",'
         '"updates":[{"topic":"topics/name.md","title":"topic title","claim_id":"stable-fact-id",'
-        '"claim_type":"file_fact|change|test_result|execution_result|deployment",'
+        '"claim_type":"file_fact|change|test_result|execution_result|report_fact|deployment",'
         '"content":"brief verified fact or explicitly Unverified candidate","expected_sha256":"current topic file hash, or null for a new topic",'
         '"observed_at":"ISO-8601 UTC","evidence":[]}]}\n'
         "Optional review_after is an explicit ISO-8601 recheck deadline. "
         "Same-content rechecks update last verification; changed facts retain superseded versions. "
+        "Keep stable behavior separate from dynamic progress and use observed_at for the fact time, not the supplementation time. "
+        "For related state, add matter_id (stable item), state_kind (behavior|progress|source|test|commit|release|installation|deployment), "
+        "and a short stage. Explicit supersedes=[topics/name.md:old-claim-id] relates older progress only in the same project, environment, matter and state kind. "
+        "Different claim_ids remain independent without an explicit relationship. File bytes may stay unchanged when Git progress advances; use fixed commit evidence for that update. "
+        "Retain behavior in its own claim when removing stale uncommitted wording. Review-required relationships and pending stages stay visible with their gaps. "
         "Inspect retained candidates with explain --job ID or review --job ID. "
         "Review can revalidate one item after adding evidence; manual confirmation remains separately recorded.\n"
         "Evidence shapes: file={kind:file,path:project-relative path,sha256:current file hash,"
         "excerpt:actual short excerpt}; commit={kind:commit,commit:full commit SHA,path:relative path,"
         "sha256:blob content SHA-256,excerpt:actual short excerpt}; "
-        "receipt={kind:receipt,receipt_id:prepared receipt id,expected_exit:observed exit code}. "
+        "receipt={kind:receipt,receipt_id:prepared receipt id,expected_exit:observed exit code}; "
+        "report={kind:report,selection_id:explicitly selected exact report id,excerpt:short exact report text}. "
+        "Use select-report --path for one specific private .local report; report_fact records the report content separately from runtime state. "
         "file_fact needs file or commit evidence; change needs a fixed commit; test_result needs "
-        "a real test receipt; execution_result needs a real execution receipt. Deployment lacks "
+        "a real test receipt; execution_result needs a real execution receipt. "
+        "Use the corresponding receipt.test_evidence runner and scope for test descriptions; "
+        "state test counts only when count_state is reported and match those statistics. "
+        "For count_state=unknown omit counts and retain the exact tested scope. "
+        "If a native lookup fails because the sandbox blocks the supported client, and this task "
+        "authorizes the bounded evidence lookup, request the client's normal tool approval to retry "
+        "the same maintenance command. Preserve the original task receipt; do not rerun its tests, "
+        "deployments or payments, or change Hook trust or global permissions. "
+        "Separate source, public-release reports and installation manifests by state_kind and matching sources. Deployment lacks "
         "a supported independent receipt and must stay pending. Never infer deployment from files. "
         "Assistant statements and these indexes alone do not prove success.\n"
         "Prefer updating the existing topic. Supply separate updates for independent facts and evidence levels. "
@@ -139,7 +156,7 @@ def handle_event(event: dict[str, Any], engine: Any) -> dict[str, Any]:
         engine.record_event_diagnostic(name, session_id, turn_id)
         receipt = engine.record_receipt(
             session_id, turn_id, tool_use_id, tool_name,
-            event["tool_input"], event["tool_response"], prefinal_hint=True,
+            event["tool_input"], event["tool_response"], prefinal_hint=True, cwd=cwd,
         )
         if not receipt.get("first_receipt"):
             return {}

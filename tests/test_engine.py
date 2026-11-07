@@ -21,6 +21,10 @@ TMP.mkdir(parents=True, exist_ok=True)
 
 class Fixture(unittest.TestCase):
     def setUp(self):
+        from akf.install import InstallError
+        native = patch("akf.execution.NativeClient", side_effect=InstallError("synthetic native endpoint unavailable"))
+        native.start()
+        self.addCleanup(native.stop)
         self.tmp = tempfile.TemporaryDirectory(prefix='core-', dir=TMP)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)

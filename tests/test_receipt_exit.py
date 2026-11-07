@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 PACKAGE=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(PACKAGE))
@@ -12,6 +13,10 @@ from akf.engine import Engine,WorkflowError
 
 class ReceiptTests(unittest.TestCase):
     def setUp(self):
+        from akf.install import InstallError
+        native = patch('akf.execution.NativeClient', side_effect=InstallError('synthetic native endpoint unavailable'))
+        native.start()
+        self.addCleanup(native.stop)
         self.temp=tempfile.TemporaryDirectory(prefix='receipt-',dir=Path(__file__).parent)
         self.addCleanup(self.temp.cleanup)
         root=Path(self.temp.name);project=root/'project';knowledge=root/'knowledge'
@@ -66,6 +71,30 @@ class ReceiptTests(unittest.TestCase):
         receipt=self.record({'exit_code':0,'result':{'exitCode':0}})
         self.assertEqual(receipt['exit_code'],0)
         self.assertEqual(receipt['exit_code_state'],'captured')
+
+    def test_help_exit_zero_stays_execution_and_test_claim_stays_pending(self):
+        for number, command in enumerate(('python3 -m unittest --help', 'pnpm exec vitest run --help')):
+            with self.subTest(command=command):
+                result = self.engine.record_receipt('session', 'turn', 'help-' + str(number), 'Bash',
+                    {'command': command}, {'exit_code': 0})
+                receipt = self.engine._get('receipt', result['receipt_id'])
+                self.assertEqual(receipt['classification'], 'execution')
+                with self.assertRaisesRegex(WorkflowError, 'Test claims need'):
+                    self.engine._evidence({'session_id': 'session', 'turn_id': 'turn'},
+                        {'content': 'Test command passed.', 'claim_type': 'test_result', 'evidence': [
+                            {'kind': 'receipt', 'receipt_id': receipt['id'], 'expected_exit': 0}]})
+
+    def test_token_value_is_omitted_from_persisted_test_scope(self):
+        result = self.engine.record_receipt('session', 'turn', 'token', 'Bash',
+            {'command': 'pnpm test -- --token synthetic-secret-for-review'}, {'exit_code': 0})
+        receipt = self.engine._get('receipt', result['receipt_id'])
+        self.assertNotIn('synthetic-secret-for-review', json.dumps(receipt))
+        self.assertEqual(receipt['test_evidence']['scope'], {'state': 'sensitive_selection_omitted'})
+
+    def test_vitest_exec_is_a_test_receipt(self):
+        result = self.engine.record_receipt('session', 'turn', 'vitest', 'Bash',
+            {'command': 'pnpm exec vitest run src/views/user/tests/PaymentView.spec.ts'}, {'exit_code': 0})
+        self.assertEqual(self.engine._get('receipt', result['receipt_id'])['classification'], 'test')
 
     def test_missing_exit_receipt_stays_pending_with_precise_reason(self):
         receipt=self.record([{'type':'text','text':'exit_code:0'}])

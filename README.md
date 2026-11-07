@@ -8,7 +8,7 @@ CLI 是主要安装入口，可选 Codex 插件提供相同的设置向导。知
 
 ## 安装
 
-当前已验证的平台为 macOS arm64。0.3.0 已在 Codex CLI 0.166.0 和 ChatGPT Desktop 26.1029.61003 的直接 Hooks 接入中完成同轮维护与新会话知识召回。ChatGPT Desktop 26.1103.32239 中已登记项目的本地插件适配入口也已完成这两个流程。
+0.3.1 为已完成本地验收的候选。macOS arm64、Codex CLI 0.166.0 的直接 Hooks 与既有本地插件适配入口均完成普通测试任务、模型维护及新会话召回；本机原生补证查询需要正式工具审批。公开安装使用已发布版本，逐版本结果见[兼容性矩阵](docs/compatibility.md)。
 
 需要 Python 3.11+、Git 和 Codex Desktop；原生启用验证还需要 Codex CLI。客户端、接入方式和升级验证见[兼容性矩阵](docs/compatibility.md)。
 
@@ -59,7 +59,7 @@ akf search --query '请求上限' --history
 akf index --rebuild
 ```
 
-检索覆盖标题、正文、源码路径和错误信息，支持中文、英文及混合查询。结果区分人工笔记、工具核验事实和已替代历史；文件变化、人工修改托管块或明确到期规则会提示复核。`--budget-bytes` 以 UTF-8 字节限制结构化结果，便于 Agent 控制上下文；空结果返回 `results: []`。本地 SQLite 索引会跟随笔记修改和删除更新，可随时重建。
+检索覆盖标题、正文、源码路径和错误信息，支持中文、英文及混合查询。同事项的进展按阶段组织，默认突出相关的最近阶段；`--history` 展开前序阶段和替代历史。稳定源码行为与测试、提交、发布、安装、部署状态分别保存，矛盾会提示审阅。结果区分人工笔记、工具核验事实和已替代历史；文件变化、人工修改托管块或明确到期规则会提示复核。`--budget-bytes` 以 UTF-8 字节限制结构化结果，便于 Agent 控制上下文；空结果返回 `results: []`。本地 SQLite 索引会跟随笔记修改和删除更新，可随时重建。
 
 ```sh
 akf pending
@@ -69,14 +69,15 @@ akf review --job JOB_ID --item topics/limits.md:request-limit --action revalidat
 akf review --job JOB_ID --item topics/limits.md:request-limit --action reject
 ```
 
-审阅逐项显示证据缺口、冲突和拟议变化。重新验证复用原有证据与写入检查；同任务中已保存的事实保持原状。`--json` 放在子命令前，供脚本读取。完整审阅、事实时效和升级回退步骤见[安装与使用](docs/install.md)。
+审阅逐项显示证据缺口、冲突和拟议变化。重新验证复用原有证据与写入检查；同任务中已保存的事实保持原状。`--reason` 保存处理原因；`link-history` 可把内容一致的候选关联到已核验历史版本。`--json` 放在子命令前，供脚本读取。完整审阅、事实时效和升级回退步骤见[安装与使用](docs/install.md)。
 
 ## 数据与权限
 
 - 用户知识库与程序、配置和状态目录分开保存。
 - 自动更新只写 `topics/*.md` 的工具托管块，保留人工正文、索引和已有历史。
 - 新设置默认通过任务回执和明确选择的文件或 commit 证据工作，不生成整个项目的内容快照。
-- 测试结论需要可信执行回执。宿主缺少结构化退出码时，测试候选保留为 pending，文件事实继续独立核验。计划、推断、源码状态和部署状态分别记录。
+- 测试结论使用对应任务的可信执行回执。缺少退出码时按需查询 Codex 原生结构化结果，核对会话、轮次、工具、项目和命令身份；缺口保留具体原因。支持 `pnpm exec vitest run ...` 等实际测试入口。
+- 私有发布报告通过 `select-report --path` 显式选择具体文件。报告内容、运行安装状态与部署结果分别核验。
 - 自动提交只处理本工具拥有的笔记；自动远端推送单独授权，并校验私有知识仓库绑定。
 - 卸载保留笔记、配置、pending 和恢复材料。安装、升级和卸载按事务回滚。
 
@@ -97,7 +98,7 @@ make test
 效果评测使用 15 个合成主题和 12 条固定查询，其中 11 条纳入 Recall@5、MRR@5，比较固定 v0.2.2 基线与当前检索。语料、评分和复现方法见[源码仓库中的固定评测](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/blob/main/evaluation/README.md)。在源码仓库根目录运行：
 
 ```sh
-python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
+python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.1/evaluation
 ```
 
 打包方法见[可复现构建](docs/reproducible-build.md)。贡献和问题反馈见 [CONTRIBUTING.md](CONTRIBUTING.md)，依赖记录见[依赖与许可证](docs/dependencies.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)。

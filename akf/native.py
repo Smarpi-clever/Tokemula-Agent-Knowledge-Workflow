@@ -74,7 +74,10 @@ class NativeClient:
                 raise InstallError("Codex 查询返回了无效 JSON。") from None
             if message.get("id") == identity:
                 if "error" in message:
-                    raise InstallError("当前客户端尚未提供此查询。请在原生 /hooks 中确认。")
+                    error = message["error"]
+                    code = error.get("code") if isinstance(error, dict) else None
+                    detail = ", code " + str(code) if isinstance(code, int) and not isinstance(code, bool) else ""
+                    raise InstallError("当前客户端尚未提供此查询（" + method + detail + "）。请在原生界面确认。")
                 return message["result"]
 
 def hook_status(client, manager, mapping):
