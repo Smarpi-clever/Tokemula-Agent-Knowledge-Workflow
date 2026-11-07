@@ -8,7 +8,7 @@ The CLI is the primary installation entry point. An optional Codex plugin provid
 
 ## Installation
 
-The currently verified platform is macOS arm64. Version 0.3.0 has completed same-turn maintenance and new-session knowledge recall through direct Hooks in Codex CLI 0.166.0 and ChatGPT Desktop 26.1029.61003. The same workflows passed through an existing local plugin adapter for configured projects in ChatGPT Desktop 26.1103.32239.
+Version 0.3.1 has been verified on macOS arm64 with Codex CLI 0.166.0 and Desktop 26.1103.32239. Direct Hooks and an existing local plugin adapter completed model-driven maintenance and new-session recall. Consecutive ordinary Desktop test tasks also supplemented their evidence within the same turn. Knowledge and state writes in a restricted sandbox still follow native approval; see the [compatibility matrix](docs/compatibility.md) for the observed frequency and scope.
 
 Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md) for client, integration, and upgrade coverage.
 
@@ -59,7 +59,7 @@ akf search --query 'request limit' --history
 akf index --rebuild
 ```
 
-Search covers titles, note bodies, source paths, and error messages in Chinese, English, or mixed queries. Results distinguish manual notes, tool-verified facts, and superseded history. File changes, edits to managed blocks, and explicit expiry rules prompt review. `--budget-bytes` caps structured output in UTF-8 bytes. A query with no matches returns `results: []`. The local SQLite index follows note edits and deletions and can be rebuilt.
+Search covers titles, note bodies, source paths, and error messages in Chinese, English, or mixed queries. Progress on the same matter is organized by stage, with the latest relevant stage prominent by default; `--history` includes earlier stages and superseded versions. Source behavior, tests, commits, releases, installation, and deployment have separate records. Conflicting states prompt review. Results distinguish manual notes, tool-verified facts, and superseded history. File changes, edits to managed blocks, and explicit expiry rules prompt review. `--budget-bytes` caps structured output in UTF-8 bytes. A query with no matches returns `results: []`. The local SQLite index follows note edits and deletions and can be rebuilt.
 
 ```sh
 akf pending
@@ -69,14 +69,15 @@ akf review --job JOB_ID --item topics/limits.md:request-limit --action revalidat
 akf review --job JOB_ID --item topics/limits.md:request-limit --action reject
 ```
 
-Review shows each candidate's evidence gaps, conflicts, and proposed change. Revalidation uses the existing evidence and write checks, preserving facts already saved in the same job. Put `--json` before the subcommand for scripts. See [installation and usage](docs/install.md) for review, fact freshness, and upgrade/rollback steps.
+Review shows each candidate's evidence gaps, conflicts, and proposed change. Revalidation uses the existing evidence and write checks, preserving facts already saved in the same job. Use `--reason` to retain the decision rationale or `link-history` to associate an identical candidate with a verified saved version. Put `--json` before the subcommand for scripts. See [installation and usage](docs/install.md) for review, fact freshness, and upgrade/rollback steps.
 
 ## Data and permissions
 
 - Your knowledge base is stored separately from the program, configuration, and state directories.
 - Automatic updates write only to tool-managed blocks in `topics/*.md`, preserving manually written content, indexes, and existing history.
 - New setups use task receipts and explicitly selected file or commit evidence, without creating a content snapshot of the entire project.
-- Test conclusions require trusted execution receipts. When the host provides no structured exit code, test candidates remain pending and file facts are verified independently. Plans, inferences, source state, and deployment state are recorded separately.
+- Test conclusions use trusted receipts from the corresponding task. Missing exit codes trigger bounded Codex native queries with session, turn, tool, project, and command identity checks. Remaining gaps retain their reasons. Test detection includes `pnpm exec vitest run ...`.
+- Private release reports use `select-report --path` to select one exact file. Report contents, running installation state, and deployment outcomes have separate verification.
 - Automatic commits include only notes owned by this tool. Automatic remote pushes require separate authorization and validate the private knowledge repository binding.
 - Uninstalling preserves notes, configuration, pending items, and recovery materials. Installation, upgrades, and uninstallation support transactional rollback.
 
@@ -97,7 +98,7 @@ Tests use synthetic projects and local Git fixtures. See [examples](examples/REA
 The evaluation uses 15 synthetic topics and 12 fixed queries. Eleven queries contribute to Recall@5 and MRR@5, comparing the fixed v0.2.2 baseline with current retrieval. Run it from the source repository root:
 
 ```sh
-python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
+python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.1/evaluation
 ```
 
 See the [fixed evaluation in the source repository](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/blob/main/evaluation/README.md) for the baseline, scoring rules, and output reports.

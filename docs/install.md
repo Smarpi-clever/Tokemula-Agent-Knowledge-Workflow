@@ -50,7 +50,7 @@ CLI 与插件共用上述规则。命令行省略 `--knowledge` 时使用已有�
 
 安装或启用插件后，仍需原生信任当前 Hook 定义。定义变化后，按 Codex 提示重新审查。原生状态不可查询时，诊断保留待确认状态。旧聊天可能保留安装前的 Hook 状态，接入验证请使用新聊天。
 
-Hook 信任与 Agent 的工具、文件写入权限是两层确认。使用项目外的知识库及专属状态目录时，如原生审批阻塞维护，请由用户在当前原生聊天或审批界面直接批准这些限定路径的维护写入，保留项目源码只读和现有审批策略。其他聊天的确认或助手转述，不能替代当前原生流程要求的直接人类确认；安装器不绕过此流程。日常普通任务无需反复提醒维护，遇到实际权限提示时按原生要求批准限定范围。参阅[原生权限请求](https://learn.chatgpt.com/docs/app-server#permission-requests)与[审批机制](https://learn.chatgpt.com/docs/sandboxing/auto-review)。
+Hook 信任与 Agent 的工具、文件写入权限分开核对。使用项目外的知识库及专属状态目录时，在当前客户端的原生流程中批准这些限定路径的维护写入及只读原生补证，保留现有沙箱和审批策略；实际授权范围以该会话的原生记录为准。日常普通任务中，模型可自行申请正式工具权限并重试维护命令，复用已执行的测试回执。0.3.1 的 Desktop 实测首轮、后续轮均在普通任务内完成，无需另发补证指令；当前受限目录场景每轮仍有 prepare、submit 两条权限请求。参阅[原生权限请求](https://learn.chatgpt.com/docs/app-server#permission-requests)与[审批机制](https://learn.chatgpt.com/docs/sandboxing/auto-review)，逐客户端结果见[兼容性矩阵](compatibility.md)。
 
 Setup 预览同时显示知识库和状态目录。允许自动更新时，应用结果会提醒用户按实际原生审批批准维护写入；新聊天由 SessionStart Hook 提供实际知识库路径和按需读取入口。用户与 Agent 共用这些 Markdown 文件，自动更新保留人工正文。
 
@@ -111,6 +111,10 @@ akf index --rebuild
 
 `review_reasons` 解释复核原因；任务本身的 completed、partial 等评估单独保留。同项目、环境及稳定 `claim_id` 的新有效证据可更新当前事实，旧内容保留历史及替代关系。独立事实使用各自的 `claim_id`。相同内容重新核验时只更新最近核验信息，保留一份内容。
 
+进展候选可使用 `matter_id` 标识事项、`state_kind` 标识状态域、`stage` 描述阶段。状态域包括 `behavior`、`progress`、`source`、`test`、`commit`、`release`、`installation` 和 `deployment`。例如兑换码生成行为保存为 `behavior`，对应提交保存为 `commit`；发布记录和实际安装分别使用 `release` 与 `installation`。已提交状态由固定 commit 证据更新，即使源码字节保持相同。
+
+跨 `claim_id` 替代通过 `supersedes: ["topics/name.md:old-claim"]` 明确选定同项目、环境、事项和状态域的旧项。默认检索突出相关最近进展，旧阶段用 `--history` 展开；未解决的不同状态提示复核。事实发生时间 `observed_at` 与最近核验／补证时间分别保存，较晚的待审候选仍保留自己的证据等级。
+
 候选可用带时区的 `review_after` 指定复核截止时间，例如 `2026-12-01T00:00:00Z`。当前文件与已记录证据不一致或超过截止时间时，结果提示待复核。固定 commit 的证据保留对应版本的含义；当前工作树变化不会自行替换该历史内容。旧记录缺失的状态显示 `unknown`，缺失的最近核验时间保留为 `null`；后续有效核验可补齐。
 
 ## 逐项处理 pending
@@ -131,14 +135,55 @@ akf review --job JOB_ID --item topics/limits.md:request-limit --action show
 ```sh
 akf review --job JOB_ID --item topics/limits.md:request-limit --action revalidate < update.json
 akf review --job JOB_ID --item topics/limits.md:request-limit --action confirm
-akf review --job JOB_ID --item topics/limits.md:request-limit --action reject
-akf review --job JOB_ID --item topics/limits.md:request-limit --action withdraw
+akf review --job JOB_ID --item topics/limits.md:request-limit --action reject --reason "证据对应其他事项"
+akf review --job JOB_ID --item topics/limits.md:request-limit --action withdraw --reason "保留历史任务，后续进展另项记录"
 akf status --job JOB_ID
 ```
 
-`revalidate` 仍检查原任务回执、文件或 commit 证据、原笔记摘要和托管块归属。人工修改引起冲突时，保留当前笔记，在新任务中重新读取后提交；原候选继续保留原笔记摘要。`confirm` 记录人工确认，工具核验状态由实际证据决定。测试与执行结论继续要求相应的可信回执。`reject` 拒绝单条候选，`withdraw` 撤回单条候选，两者均保存简短处理记录；同任务中已成功保存的事实保留。
+`revalidate` 仍检查原任务回执、文件或 commit 证据、原笔记摘要和托管块归属；自动重验保留原有 CAS 检查。`confirm` 记录人工确认，工具核验状态由实际证据决定。测试与执行结论继续要求相应的可信回执。`reject` 拒绝单条候选，`withdraw` 撤回单条候选；`--reason` 保存具体处理原因，同任务中已成功保存的事实保留。
+
+同一主题后续写入或人工正文变化导致笔记摘要过期时，先用 `read` 审阅当前笔记，取返回的 `sha256`，再为选定候选显式调整写入锚：
+
+```sh
+akf --json read --path topics/limits.md --start-line 1 --end-line 80
+akf review --job JOB_ID --item topics/limits.md:request-limit --action reanchor \
+  --expected-sha256 CURRENT_NOTE_SHA256 --reason "已审阅当前正文与目标托管块"
+akf review --job JOB_ID --item topics/limits.md:request-limit --action revalidate < update.json
+```
+
+`CURRENT_NOTE_SHA256` 使用刚读取的完整摘要。`reanchor` 严格匹配当前摘要及目标工具托管块，仅调整所选 pending 的写入锚，保留人工正文、原候选的 `expected_sha256` 及审阅前后锚记录。之后继续用原候选对象补齐并核验原任务证据。目标托管块被人工编辑或归属未知时，保留当前笔记并转人工处理。
+
+候选与已保存的工具核验事实内容一致时，可显式关联已有历史，保留原任务和事实的来源：
+
+```sh
+akf review --job JOB_ID --item topics/limits.md:request-limit --action link-history \
+  --fact topics/limits.md:request-limit --version VERSION_ID --reason "内容与已核验历史版本一致"
+```
+
+`--version` 省略时选择当前版本。关联检查项目、环境、事实类型及内容，并记录所选版本；关联后的候选保留 `linked_history` 处理记录。历史补证使用原任务对应的执行证据；付款、部署及远端操作沿用原有结果审阅。
+
+一条候选聚合多个测试范围，而当前只取得部分对应证据时，先保存已核验子范围并保留其余 pending：
+
+```sh
+akf review --job JOB_ID --item topics/limits.md:request-limit --action split \
+  --reason "已补齐其中两份 Vitest 的证据，其余测试范围继续待审" < split.json
+```
+
+`split.json` 使用普通候选结构 `{"status":"partial","updates":[verified_child,residual_original]}`，两项沿用原主题和原 `expected_sha256`：子项使用新的 `claim_id` 与精确证据，原 `claim_id` 保留剩余范围、`Unverified:` 前缀和 `evidence: []`。处理沿用原任务／job，原完整候选记入审阅历史，其他 pending 保持原状；中断后用 `resume` 继续。
 
 `resume --job ID` 恢复既有写入或同步，`undo --job ID` 按恢复机制撤销工具拥有的变化。完成目标随当前配置确定：仅本地保存时，保存成功且没有遗留候选的任务从 context 待办移除；启用提交或推送时，相关同步问题单独展示。
+
+## 显式使用私有发布报告
+
+私有报告位于项目 `.local/` 时，先选定需要的具体文件：
+
+```sh
+akf --json select-report --path .local/production/releases/example/RELEASE.md
+```
+
+选择结果给出 `selection_id`、具体路径、内容摘要和选择时间。维护候选使用 `claim_type: "report_fact"`，并加入 `{"kind":"report","selection_id":"返回的ID","excerpt":"报告中的短原文"}`。该事实陈述报告记录的内容；安装与部署结果继续使用各自的运行证据。
+
+选择仅接受项目 `.local/` 下的规范相对路径、UTF-8 Markdown／JSON／文本文件，最多 16000 bytes；检查路径范围、符号链接和敏感文本，不扫描目录。报告内容变化后重新选择该文件。其余隐藏路径继续沿用原有规则。
 
 ## 升级、迁移与回滚
 
@@ -164,9 +209,9 @@ akf status --job JOB_ID
 
 需要处理旧绑定中的任务时，用保留的 `--config` 查看状态，重新核对该绑定的授权和有效期，再按需 `enable` 及 `resume --job ID`。恢复知识任务不会恢复已取消的产品工作。
 
-### 0.3.0 的状态与索引
+### 0.3.1 的状态与索引
 
-升级前保留所选配置、`state_dir` 与知识库的副本；在隔离副本上先完成检索、审阅和回退检查。0.3.0 沿用 Markdown 与原事实记录，读取旧字段时保留已知信息，缺失的状态显示 `unknown`。检索索引属于可重建数据，升级后可执行 `akf index --rebuild`。
+升级前保留所选配置、`state_dir` 与知识库的副本；在隔离副本上先完成检索、审阅和回退检查。0.3.1 沿用 Markdown 与原事实记录，读取旧字段时保留已知信息，缺失的状态显示 `unknown`。检索索引属于可重建数据，升级后可执行 `akf index --rebuild`。
 
 安装升级返回的事务 ID 用于回滚程序和安装接入，升级后新增的知识和 pending 保留。知识写入使用 `undo --job ID` 的恢复记录单独处理。需要恢复升级前的数据快照时，先另存当前知识库和状态，在隔离副本核对后选择恢复范围。
 
@@ -174,7 +219,7 @@ akf status --job JOB_ID
 
 CLI 独立工作。可选插件通过同一引擎和向导完成设置，使用默认状态目录 `~/Library/Application Support/AgentKnowledgeWorkflow/`。自定义 `AKF_HOME` 的安装请选择 `direct` 模式。
 
-从同一 Release 下载 `TokemulaAgentKnowledgeWorkflow-0.3.0-codex-plugin.zip`，核对摘要并解压。注册其中的 marketplace 目录：
+从同一 Release 下载 `TokemulaAgentKnowledgeWorkflow-<版本>-codex-plugin.zip`，核对摘要并解压。注册其中的 marketplace 目录：
 
 ```sh
 codex plugin marketplace add /path/to/agent-knowledge-workflow-marketplace
@@ -198,4 +243,8 @@ codex plugin marketplace remove agent-knowledge-workflow
 
 `akf doctor` 使用独立的只读 Codex stdio 连接查询 Hook 和任务记录，无需先启动 daemon。Hook 已信任与维护已启用分别显示：`Trusted` 来自原生 Hook 状态；`Enabled` 继续要求已有授权和真实任务的维护验证。
 
-执行回执的 `exit_code_state` 会说明退出码是已捕获、缺失、非法或冲突。仅结构化整数退出码参与执行结论验证；缺少可信字段的宿主输出保留为待审证据。文件事实继续按文件或固定 commit 证据核验，与测试候选分别保存。
+执行回执的 `exit_code_state` 说明退出码是已捕获、缺失、非法、冲突或原生补齐。需要的缺失回执通过受支持的 App Server 查询补证，核对会话、轮次、工具调用、项目与命令身份；同次操作复用查询结果，保存原回执、来源、执行时间和补证时间。接口不可用或身份不符时保留具体原因。
+
+测试识别包括 `pnpm exec vitest run src/views/user/tests/PaymentView.spec.ts`、Python unittest／pytest 和 Go test 等入口，以及简单 shell 包装。测试范围和结论使用该测试对应的证据；数量仅在 `test_evidence.count_state=reported` 时按对应统计记录，`unknown` 时保留精确测试范围。复合命令整体退出码按实际归属处理。执行成功、失败、运行中、中断和未知分别保存，文件事实继续按文件或固定 commit 证据核验。
+
+原生只读补证查询遇到沙箱拒绝，且本任务已授权该查询时，通过客户端正式工具审批重试同一维护命令，继续关联原任务回执。原测试、付款和部署保持原执行记录，Hook 信任与全局权限沿用既有设置。

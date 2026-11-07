@@ -30,15 +30,17 @@ CI runs syntax checks, isolated tests and two committed-source builds on the `ma
 
 CI uses the [GitHub-hosted macOS runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) and pinned releases of [checkout](https://github.com/actions/checkout/releases/tag/v7.0.1) and [setup-python](https://github.com/actions/setup-python/releases/tag/v7.0.0), with read-only repository permission and credential persistence disabled.
 
-## v0.3.0 local acceptance and evaluation
+## v0.3.1 acceptance, evaluation and release evidence
 
-Keep candidate evidence and packages under `.local/v0.3.0/`. The fixed synthetic evaluation uses the baseline commit recorded in `evaluation/README.md`:
+Keep candidate evidence and packages under `.local/v0.3.1/`, with one acceptance table at `.local/v0.3.1/ACCEPTANCE.md`. Preserve the v0.3.0 evaluation corpus and scoring rules; the fixed baseline commit is recorded in `evaluation/README.md`:
 
 ```sh
-python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.0/evaluation
-python3 -B scripts/build_package.py --output .local/v0.3.0/packages
+python3 -B scripts/evaluate_retrieval.py --output .local/v0.3.1/evaluation
+python3 -B scripts/build_package.py --output .local/v0.3.1/packages
 ```
 
 The evaluation writes `report.json` and `report.md`, recording Recall@5, MRR@5, state-handling checks, UTF-8 output bytes, and local query latency. The corpus, queries, and scoring rules are versioned in `evaluation/`; runtime indexes and reports stay in `.local/`.
+
+Build the final CLI and plugin candidates from the final local commit in a clean source copy. Keep real configurations, knowledge, native session records, and recovery evidence under `.local/` and outside package inputs. Candidate construction and local commits are separate from a real upgrade, remote push, tag, or release.
 
 Before using a candidate on a daily project, test an isolated copy of its configuration, state directory, and knowledge base. Exercise search/read/update/search, pending review, index rebuild, upgrade from the baseline, and installer rollback. The installer transaction restores program and integration changes; knowledge-write recovery uses the corresponding job's `undo` records. A full pre-upgrade data restore uses the saved knowledge and state copies. See [installation and usage](install.md).
