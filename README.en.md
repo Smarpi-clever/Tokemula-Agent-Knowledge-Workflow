@@ -8,7 +8,9 @@ The CLI is the primary installation entry point. An optional Codex plugin provid
 
 ## Installation
 
-The currently verified platform is macOS arm64. Version 0.3.0 has completed same-turn maintenance and new-session knowledge recall through direct Hooks in Codex CLI 0.166.0 and ChatGPT Desktop 26.1029.61003. Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md) for client, integration, and upgrade coverage.
+The currently verified platform is macOS arm64. Version 0.3.0 has completed same-turn maintenance and new-session knowledge recall through direct Hooks in Codex CLI 0.166.0 and ChatGPT Desktop 26.1029.61003. The same workflows passed through an existing local plugin adapter for configured projects in ChatGPT Desktop 26.1103.32239.
+
+Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md) for client, integration, and upgrade coverage.
 
 1. Download the macOS package from [GitHub Releases](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/releases) and verify its checksum against `SHA256SUMS` from the same release.
 2. Extract the package and double-click `Install.command`. Choose your project, knowledge base, and sync mode, then review the proposed changes.

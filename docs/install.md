@@ -27,7 +27,7 @@ CLI 与插件共用上述规则。命令行省略 `--knowledge` 时使用已有�
 首次使用建议先保持自动提交和自动推送关闭，只在确认读取及写入范围后开启知识更新。
 
 1. 完成安装和项目绑定，运行 `akf doctor`。
-2. 在 Codex 原生 Hooks 管理界面审阅当前定义并完成信任；CLI 可使用 `/hooks`。
+2. 在 Codex 原生 Hooks 界面完成审阅和信任：Desktop 使用“设置 → Hooks”或输入区的“Review hooks”，CLI 使用 `/hooks`。
 3. 用 `akf setup` 明确允许该项目的自动知识更新。
 4. 在项目中新建聊天，完成一次普通任务。
 5. 运行 `akf doctor --verify`，核对实际原生维护结果。

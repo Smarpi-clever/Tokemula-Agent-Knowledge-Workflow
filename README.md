@@ -8,7 +8,9 @@ CLI 是主要安装入口，可选 Codex 插件提供相同的设置向导。知
 
 ## 安装
 
-当前已验证的平台为 macOS arm64。0.3.0 已在 Codex CLI 0.166.0 和 ChatGPT Desktop 26.1029.61003 的直接 Hooks 接入中完成同轮维护与新会话知识召回。需要 Python 3.11+、Git 和 Codex Desktop；原生启用验证还需要 Codex CLI。客户端、接入方式和升级验证见[兼容性矩阵](docs/compatibility.md)。
+当前已验证的平台为 macOS arm64。0.3.0 已在 Codex CLI 0.166.0 和 ChatGPT Desktop 26.1029.61003 的直接 Hooks 接入中完成同轮维护与新会话知识召回。ChatGPT Desktop 26.1103.32239 中已登记项目的本地插件适配入口也已完成这两个流程。
+
+需要 Python 3.11+、Git 和 Codex Desktop；原生启用验证还需要 Codex CLI。客户端、接入方式和升级验证见[兼容性矩阵](docs/compatibility.md)。
 
 1. 从 [GitHub Releases](https://github.com/Smarpi-clever/Tokemula-Agent-Knowledge-Workflow/releases) 下载 macOS 安装包，并按同一版本的 `SHA256SUMS` 核对摘要。
 2. 解压后双击 `Install.command`，选择项目、知识库和同步方式，查看改动预览。
