@@ -61,7 +61,7 @@ class FakeEngine:
     def record_event_diagnostic(self, event_name, session_id, turn_id, stop_hook_active=None):
         pass
 
-    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response, *, prefinal_hint=False):
+    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response, *, prefinal_hint=False, cwd=None):
         self.calls.append(("receipt", session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response))
         if self.maintenance or self.prepared_job or self.job is None:
             return {"state": "ignored"}

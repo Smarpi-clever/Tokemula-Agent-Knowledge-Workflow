@@ -68,6 +68,12 @@ class NativeStdioTests(unittest.TestCase):
                 client.request('hooks/list',{})
         self.assertIsNotNone(process.poll())
 
+    def test_native_query_error_records_method_and_numeric_code(self):
+        os.environ['NATIVE_TEST_SCENARIO']='error'
+        with self.assertRaisesRegex(InstallError, r'thread/items/list, code -32601'):
+            with NativeClient() as client:
+                client.request('thread/items/list', {'threadId':'fixture','turnId':'turn'})
+
     def test_trusted_hooks_alone_do_not_enable_maintenance(self):
         from akf.install import Manager, EVENTS
         from akf.setup_cli import inspect

@@ -106,14 +106,16 @@ class SearchIndex:
             passage["path"], json.dumps(passage, ensure_ascii=False, sort_keys=True)))
         sources = " ".join(" ".join(str(e.get(key, "")) for key in ("path", "commit", "id", "excerpt"))
                            for e in passage["sources"])
-        values = [passage["title"], passage["body"], passage["path"] + " " + sources]
+        values = [passage["title"], passage["body"], passage["path"] + " " + sources + " " + (passage.get("matter_id") or "")]
         db.execute("INSERT INTO search(rowid,title,body,source) VALUES(?,?,?,?)", (
             cursor.lastrowid, *(" ".join(sorted(_tokens(value, include_unigrams=True))) for value in values)))
 
     def _passage(self, path, title, body, start, end, *, fact=None, origin="human_note"):
         status = {"evidence_status": "unknown", "lifecycle": "unknown", "review_status": "unknown",
                   "review_reasons": [], "last_verified_at": None, "environment": "unknown",
-                  "version_id": "unknown", "superseded_by": None, "observed_at": None}
+                  "version_id": "unknown", "superseded_by": None, "observed_at": None,
+                  "matter_id": None, "state_kind": None, "stage": None, "supersedes": [],
+                  "superseded_by_claim": None, "related_current": [], "related_pending": []}
         if fact:
             status.update({k: fact.get(k, v) for k, v in status.items()})
         return {"path": path, "title": title, "body": body, "start_line": start, "end_line": end,
@@ -122,10 +124,10 @@ class SearchIndex:
 
     def _index_file(self, db, path, text, title, facts):
         self._delete(db, path)
-        current = {f["claim_id"]: f for f in facts if f.get("lifecycle") != "superseded"}
+        current = {f["claim_id"]: f for f in facts if "block" in f}
         histories = {}
         for fact in facts:
-            if fact.get("lifecycle") == "superseded":
+            if fact.get("lifecycle") == "superseded" and "block" not in fact:
                 histories.setdefault(fact["claim_id"], []).append(fact)
         spans = []
         for match in BLOCK.finditer(text):
@@ -135,7 +137,7 @@ class SearchIndex:
             fact = current.get(match.group(1))
             if fact and match.group() == fact.get("block"):
                 self._insert(db, self._passage(path, fact.get("title", title), fact["content"], start, end,
-                                             fact=fact, origin="verified_fact"))
+                                             fact=fact, origin="history" if fact.get("lifecycle") == "superseded" else "verified_fact"))
                 for previous in histories.get(fact["claim_id"], []):
                     self._insert(db, self._passage(path, previous.get("title", title), previous["content"], start, end,
                                                  fact=previous, origin="history"))
@@ -171,6 +173,7 @@ class SearchIndex:
             self._insert(db, self._passage(path, heading, "\n".join(group), group_start, len(lines)))
 
     def _pending(self):
+        from .engine import timestamp
         passages = []
         for job in self.engine._all("job"):
             if job["state"] in {"cancelled", "rejected", "no_change"}:
@@ -191,6 +194,21 @@ class SearchIndex:
                 passage["job_id"] = job["id"]
                 passage["item_id"] = entry.get("id", update["topic"] + ":" + update["claim_id"])
                 passages.append(passage)
+        groups = {}
+        for passage in passages:
+            groups.setdefault((passage["path"], passage["claim_id"], passage["environment"]), []).append(passage)
+        for group in groups.values():
+            dated = [passage for passage in group if passage.get("observed_at")]
+            if len(dated) < 2:
+                continue
+            dated.sort(key=lambda passage: timestamp(passage["observed_at"]), reverse=True)
+            latest = dated[0]
+            older = [passage for passage in dated[1:] if timestamp(passage["observed_at"]) < timestamp(latest["observed_at"]) or passage["body"] == latest["body"]]
+            latest["related_pending"] = [{"job": passage["job_id"], "item": passage["item_id"],
+                                           "observed_at": passage["observed_at"]} for passage in older]
+            for passage in older:
+                passage.update(lifecycle="superseded", superseded_by=latest["job_id"],
+                               superseded_by_claim=latest["item_id"])
         return passages
 
     def _refresh(self, db):
@@ -270,6 +288,7 @@ class SearchIndex:
             return topics
 
     def search(self, query, limit=5, budget_bytes=6000, history=False):
+        from .engine import timestamp
         _limits(limit, budget_bytes)
         if not isinstance(query, str) or not query.strip() or len(query) > 500:
             raise WorkflowError("input", "Query must contain 1 to 500 characters")
@@ -295,7 +314,9 @@ class SearchIndex:
                     # Current facts win ties while matching history remains accessible explicitly.
                     priority = {"current": 3, "unknown": 2, "candidate": 1, "superseded": 0}.get(passage["lifecycle"], 0)
                     matches.append((score, priority, passage))
-        matches.sort(key=lambda item: (-item[0], -item[1], item[2]["path"], item[2]["start_line"] or 0))
+        matches.sort(key=lambda item: (-item[0], -item[1],
+                                      -timestamp(item[2]["observed_at"]).timestamp() if item[2].get("observed_at") else float("inf"),
+                                      item[2]["path"], item[2]["start_line"] or 0))
         results = []
         for score, priority, passage in matches[:limit]:
             value = {k: v for k, v in passage.items() if k != "body"}

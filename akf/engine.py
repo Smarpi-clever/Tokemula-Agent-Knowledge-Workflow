@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import sqlite3
 import subprocess
 import sys
@@ -55,7 +54,7 @@ def safe_text(text: str) -> None:
     patterns = [
         r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
         r"\b(?:sk-(?:proj-)?|ghp_|github_pat_|AKIA)[A-Za-z0-9_-]{12,}",
-        r"(?i)\b(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]\s*['\"]?[^\s'\"]{8,}",
+        r"(?i)\b(?:api[_-]?key|password|secret|access[_-]?token)['\"]?\s*[:=]\s*['\"]?[^\s'\"]{8,}",
         r"(?i)https?://[^/\s:@]+:[^/\s@]+@",
         r"(?i)(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|system)\s+instructions",
         r"(?i)(?:bypass[-_ ]hook[-_ ]trust|<\|(?:system|developer)\|>|\[system\])",
@@ -117,6 +116,7 @@ class Engine:
                 raise WorkflowError("config", "Git switches must be booleans")
         if self.config.get("expires_at"):
             timestamp(self.config["expires_at"])
+        self._native_query_cache = {}
         self.knowledge_id = self.config["knowledge_id"]
         if not isinstance(self.knowledge_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", self.knowledge_id):
             raise WorkflowError("config", "Invalid knowledge identity")
@@ -310,7 +310,7 @@ class Engine:
             entry["stop_hook_active"] = stop_hook_active
         self._put("diagnostic", key, entry)
 
-    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response, *, prefinal_hint=False) -> dict:
+    def record_receipt(self, session_id, turn_id, tool_use_id, tool_name, tool_input, tool_response, *, prefinal_hint=False, cwd: Path | None = None) -> dict:
         if not self._active() or self._maintenance(session_id, turn_id):
             return {"state": "ignored"}
         key = session_id + ":" + turn_id
@@ -360,35 +360,20 @@ class Engine:
             exit_code_state = "conflicting_structured_exit_codes"
         elif codes and exit_code_state != "invalid_structured_exit_code":
             exit_code, exit_code_state = codes[0], "captured"
-        try:
-            lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-            lexer.whitespace_split = True
-            lexer.commenters = ""
-            words = list(lexer)
-        except ValueError:
-            words = []
-        while words and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=[^\n]*", words[0]):
-            words.pop(0)
-        executable = Path(words[0]).name if words else ""
-        args = words[1:]
-        test_command = False
-        compound = any(token and set(token) <= set("();<>|&") for token in words)
-        if not compound and "\n" not in command and "`" not in command:
-            if executable in {"pytest", "pytest-3"}:
-                test_command = True
-            elif executable == "go" and args[:1] == ["test"]:
-                test_command = True
-            elif executable in {"npm", "pnpm"} and (args[:1] == ["test"] or args[:2] == ["run", "test"]):
-                test_command = True
-            elif re.fullmatch(r"python[0-9.]*", executable):
-                while args and args[0] in {"-B", "-I", "-u"}:
-                    args.pop(0)
-                test_command = len(args) >= 2 and args[0] == "-m" and args[1] in {"unittest", "pytest"}
+        from .execution import test_command, test_details
+        is_test = test_command(command)
+        command_cwd = tool_input.get("workdir", tool_input.get("cwd")) if isinstance(tool_input, dict) else None
+        command_cwd = Path(command_cwd) if isinstance(command_cwd, str) and command_cwd else (cwd or self.project_root)
+        if not command_cwd.is_absolute():
+            command_cwd = self.project_root / command_cwd
         receipt = {"id": receipt_id, "session_id": session_id, "turn_id": turn_id,
                    "tool_use_id": tool_use_id, "tool_name": str(tool_name)[:120], "observed_at": now(),
                    "command_sha256": digest(command.encode()), "exit_code": exit_code,
-                   "exit_code_state": exit_code_state,
-                   "classification": "test" if test_command else "execution"}
+                   "exit_code_state": exit_code_state, "command_cwd": str(command_cwd.resolve()),
+                   "execution_state": "unknown" if exit_code is None else "success" if exit_code == 0 else "failure",
+                   "classification": "test" if is_test else "execution"}
+        if is_test:
+            receipt["test_evidence"] = test_details(command)
         if self.config.get("receipt_diagnostics", False):
             allowed = {"exit_code", "exitCode", "result", "structuredContent", "content", "output",
                        "type", "text", "stdout", "stderr", "metadata"}
@@ -423,6 +408,15 @@ class Engine:
             result["trigger_marker"] = trigger["marker"]
         return result
 
+    def _recover_receipt(self, receipt: dict, job: dict | None = None) -> dict:
+        from .execution import recover_receipt
+        recovered = recover_receipt(receipt, self.project_root, cache=self._native_query_cache)
+        self._put("receipt", recovered["id"], recovered)
+        if job is not None and job.get("id"):
+            job["receipts"] = [recovered if item["id"] == recovered["id"] else item for item in job.get("receipts", [])]
+            self._put("job", job["id"], job)
+        return recovered
+
     def prepare_maintenance(self, session_id, turn_id, *, source="prefinal") -> dict | None:
         if not self._active() or self._maintenance(session_id, turn_id):
             return None
@@ -436,6 +430,8 @@ class Engine:
         receipts = [r for r in self._all("receipt") if r["session_id"] == session_id and r["turn_id"] == turn_id]
         if not changed and not receipts:
             return None
+        self._native_query_cache = {}
+        receipts = [self._recover_receipt(receipt) if receipt.get("classification") == "test" and receipt.get("exit_code") is None else receipt for receipt in receipts]
         job_id = uuid.uuid4().hex
         job = {"id": job_id, "session_id": session_id, "turn_id": turn_id, "created_at": now(),
                "state": "candidate_pending", "preparation_source": source,
@@ -507,13 +503,19 @@ class Engine:
                 if excerpt.encode() not in data:
                     raise WorkflowError("pending_evidence", "Evidence excerpt does not match source")
                 verified.append({k: item[k] for k in ("kind", "path", "sha256", "excerpt", "commit") if k in item})
+            elif kind == "report":
+                from .reports import report_evidence
+                verified.append(report_evidence(self, item))
             elif kind == "receipt":
                 receipt = self._get("receipt", item.get("receipt_id", ""))
                 if not receipt or receipt["session_id"] != job["session_id"] or receipt["turn_id"] != job["turn_id"]:
                     raise WorkflowError("pending_evidence", "Receipt does not belong to this task")
                 if receipt["exit_code"] is None:
+                    receipt = self._recover_receipt(receipt, job)
+                if receipt["exit_code"] is None:
                     state = receipt.get("exit_code_state", "missing_structured_exit_code")
-                    raise WorkflowError("pending_evidence", "Receipt has no trusted exit state: " + state)
+                    reason = receipt.get("native_evidence", {}).get("reason")
+                    raise WorkflowError("pending_evidence", "Receipt has no trusted exit state: " + state + ("; " + reason if reason else ""))
                 if receipt["exit_code"] != item.get("expected_exit"):
                     raise WorkflowError("pending_evidence", "Receipt exit state differs")
                 verified.append({"kind": "receipt", **receipt})
@@ -521,6 +523,8 @@ class Engine:
                 raise WorkflowError("pending_evidence", "Unsupported evidence kind")
         claim_type = update.get("claim_type")
         kinds = {e["kind"] for e in verified}
+        if claim_type == "report_fact" and "report" not in kinds:
+            raise WorkflowError("pending_evidence", "Report statements need explicitly selected report evidence")
         if claim_type == "file_fact" and not kinds & {"file", "commit"}:
             raise WorkflowError("pending_evidence", "File facts need source evidence")
         if claim_type == "change" and "commit" not in kinds:
@@ -529,7 +533,7 @@ class Engine:
             raise WorkflowError("pending_evidence", "Test claims need a captured test exit receipt")
         if claim_type == "execution_result" and "receipt" not in kinds:
             raise WorkflowError("pending_evidence", "Execution claims need a captured exit receipt")
-        if claim_type not in {"file_fact", "change", "test_result", "execution_result"}:
+        if claim_type not in {"file_fact", "change", "test_result", "execution_result", "report_fact"}:
             raise WorkflowError("pending_evidence", "This claim type needs an independently supported verifier")
         return verified
 
@@ -539,10 +543,18 @@ class Engine:
                  "Evidence status: tool_verified", "Fact state: current", "Review after: " + (update.get("review_after") or "none"),
                  "Environment: " + self.config.get("environment", "local"),
                  "Task assessment: " + outcome, "Sources:"]
+        for key, label in (("matter_id", "Matter"), ("state_kind", "State kind"), ("stage", "Stage")):
+            if update.get(key):
+                lines.insert(-1, label + ": " + update[key])
+        if update.get("supersedes"):
+            lines.insert(-1, "Replaces: " + ", ".join(update["supersedes"]))
         for e in evidence:
             if e["kind"] in {"file", "commit"}:
                 pointer = e.get("commit", "working-tree") + ":" + e["path"]
                 lines.append("- `" + pointer + "` (SHA-256 `" + e["sha256"] + "`)")
+                lines.append("  Evidence: " + e["excerpt"].replace("\n", " "))
+            elif e["kind"] == "report":
+                lines.append("- Selected report `" + e["path"] + "` (SHA-256 `" + e["sha256"] + "`; report content)")
                 lines.append("  Evidence: " + e["excerpt"].replace("\n", " "))
             else:
                 lines.append("- Tool receipt `" + e["id"] + "`, exit `" + str(e["exit_code"]) + "`, command SHA-256 `" + e["command_sha256"] + "`")
@@ -551,7 +563,7 @@ class Engine:
             for previous in history:
                 lines.append("- " + previous["observed_at"] + " [superseded; version " + previous.get("version_id", "unknown") + "]" + ": " + previous["content"].replace("\n", " "))
                 for source in previous.get("evidence", []):
-                    if source.get("kind") in {"file", "commit"}:
+                    if source.get("kind") in {"file", "commit", "report"}:
                         lines.append("  Source: `" + source.get("commit", "working-tree") + ":" + source["path"] + "` (SHA-256 `" + source["sha256"] + "`)")
         lines.append("<!-- /akf:" + update["claim_id"] + " -->")
         return "\n".join(lines)
@@ -570,7 +582,10 @@ class Engine:
                            "push": bool(self.config.get("git", {}).get("auto_push") and job.get("plans") and job.get("write_state") != "remote_confirmed")}}
 
     def fact_status(self, fact: dict) -> dict:
-        return facts.status(self, fact)
+        identity = (fact.get("topic"), fact.get("claim_id"), fact.get("version_id"))
+        effective = next((record for record in facts.records(self) if (record.get("topic"), record.get("claim_id"), record.get("version_id")) == identity), None)
+        return {key: value for key, value in (effective or facts.status(self, fact)).items()
+                if key in {"evidence_status", "lifecycle", "review_status", "review_reasons", "last_verified_at", "environment", "version_id", "superseded_by", "superseded_by_claim", "related_current"}}
 
     def fact_records(self, include_history: bool = False) -> list[dict]:
         return facts.records(self, include_history)
@@ -591,7 +606,8 @@ class Engine:
         states = {"local_saved": 1, "committed": 2, "remote_confirmed": 3}
         return states.get(job.get("write_state", job["state"]), 0) >= states[self.completion_target()]
 
-    def submit(self, job_id: str, candidate: dict, *, only_item: str | None = None) -> dict:
+    def submit(self, job_id: str, candidate: dict, *, only_item: str | set[str] | None = None, split_from: str | None = None) -> dict:
+        self._native_query_cache = {}
         job = self._get("job", job_id)
         if not job:
             raise WorkflowError("job", "Unknown maintenance job")
@@ -635,14 +651,15 @@ class Engine:
             for update in updates:
                 if not isinstance(update, dict):
                     raise WorkflowError("candidate", "Invalid knowledge update")
-                allowed = {"topic", "title", "claim_id", "claim_type", "content", "expected_sha256", "observed_at", "evidence", "environment", "review_after"}
+                allowed = {"topic", "title", "claim_id", "claim_type", "content", "expected_sha256", "observed_at", "evidence", "environment", "review_after", "matter_id", "state_kind", "stage", "supersedes"}
                 if set(update) - allowed:
                     raise WorkflowError("candidate", "Unexpected knowledge fields")
                 for key in ("topic", "title", "claim_id", "claim_type", "content", "observed_at"):
                     safe_text(update.get(key))
+                facts.validate_scope(update)
                 if "environment" in update:
                     safe_text(update["environment"])
-                if update["claim_type"] not in {"file_fact", "change", "test_result", "execution_result", "deployment"}:
+                if update["claim_type"] not in {"file_fact", "change", "test_result", "execution_result", "report_fact", "deployment"}:
                     raise WorkflowError("candidate", "Invalid claim type")
                 expected = update.get("expected_sha256")
                 if expected is not None and (not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)):
@@ -651,7 +668,7 @@ class Engine:
                 if not isinstance(evidence_items, list) or len(evidence_items) > 20:
                     raise WorkflowError("candidate", "Evidence must be a bounded list")
                 for item in evidence_items:
-                    if not isinstance(item, dict) or set(item) - {"kind", "path", "sha256", "excerpt", "commit", "receipt_id", "expected_exit"}:
+                    if not isinstance(item, dict) or set(item) - {"kind", "path", "sha256", "excerpt", "commit", "receipt_id", "expected_exit", "selection_id"}:
                         raise WorkflowError("candidate", "Unexpected evidence fields")
                     for key, value in item.items():
                         if key == "expected_exit":
@@ -659,13 +676,13 @@ class Engine:
                                 raise WorkflowError("candidate", "Receipt requires an integer exit state")
                         else:
                             safe_text(value)
-                    if item.get("kind") not in {"file", "commit", "receipt"}:
+                    if item.get("kind") not in {"file", "commit", "receipt", "report"}:
                         raise WorkflowError("candidate", "Invalid evidence kind")
                     if "path" in item:
                         self._path(self.project_root, item["path"])
                     if "excerpt" in item and len(item["excerpt"]) > 2000:
                         raise WorkflowError("candidate", "Evidence excerpt is too large")
-                    for key, size in (("sha256", 64), ("commit", 40), ("receipt_id", 24)):
+                    for key, size in (("sha256", 64), ("commit", 40), ("receipt_id", 24), ("selection_id", 24)):
                         if key in item and not re.fullmatch(r"[0-9a-f]{" + str(size) + r"}", item[key]):
                             raise WorkflowError("candidate", "Invalid evidence identity")
                 topic_path = self._path(self.knowledge_root, update.get("topic"), note=True)
@@ -696,9 +713,23 @@ class Engine:
             resolved = dict(job.get("resolved_updates", {}))
             remaining = {e["update"]["topic"] + ":" + e["update"]["claim_id"]: e
                          for e in job.get("pending_updates", []) if not e.get("withdrawn")}
+            if split_from is not None:
+                original = remaining.get(split_from)
+                if not original or len(updates) != 2 or split_from not in {u["topic"] + ":" + u["claim_id"] for u in updates}:
+                    raise WorkflowError("review", "Split requires the selected pending item and one new subset")
+                child = next(u for u in updates if u["topic"] + ":" + u["claim_id"] != split_from)
+                child_key = child["topic"] + ":" + child["claim_id"]
+                if child_key in remaining or child_key in resolved or self._get("fact", child_key):
+                    raise WorkflowError("review", "Split subset identity is already in use")
+                remaining[child_key] = {**{k: v for k, v in original.items() if k.startswith("anchor_")},
+                                        "update": child, "split_from": split_from}
+                for intent in reversed(job.get("review_history", [])):
+                    if intent.get("action") == "split" and intent.get("item_id") == split_from and intent.get("result") == "preparing":
+                        intent.update(child_item=child_key, split_candidate=candidate)
+                        break
             for update in updates:
                 key = update["topic"] + ":" + update["claim_id"]
-                identity = digest(json.dumps({k: update[k] for k in ("topic", "claim_id", "claim_type", "content")}, sort_keys=True).encode())
+                identity = digest(json.dumps({k: update[k] for k in ("topic", "claim_id", "claim_type", "content", "matter_id", "state_kind", "stage", "supersedes") if k in update}, sort_keys=True).encode())
                 if key in resolved:
                     if resolved[key] != identity:
                         raise WorkflowError("conflict", "A settled fact cannot be changed while resolving this job")
@@ -712,9 +743,10 @@ class Engine:
             job["candidate"] = candidate
             self._put("job", job_id, job)
             with self._writer():
+                selected_items = {only_item} if isinstance(only_item, str) else only_item
                 groups, untouched = {}, []
                 for key, entry in remaining.items():
-                    if only_item is not None and key != only_item:
+                    if selected_items is not None and key not in selected_items or split_from is not None and key not in {split_from, child_key}:
                         untouched.append(entry)
                     else:
                         groups.setdefault(entry["update"]["topic"], []).append(entry)
@@ -740,6 +772,8 @@ class Engine:
                         key = topic + ":" + update["claim_id"]
                         previous = self._get("fact", key)
                         old_block = previous["block"] if previous else ""
+                        if previous and not any(field in update for field in facts.SCOPE_FIELDS):
+                            update = {**{field: previous[field] for field in facts.SCOPE_FIELDS if field in previous}, **update}
                         if previous:
                             if facts.environment(previous) not in {"unknown", self.config.get("environment", "local")}:
                                 raise WorkflowError("conflict", "Existing fact belongs to another environment")
@@ -753,6 +787,7 @@ class Engine:
                             raise WorkflowError("conflict", "Unknown managed block requires manual review")
                         try:
                             evidence = self._evidence(job, update)
+                            relationship_versions = facts.validate_relationships(self, update)
                         except WorkflowError as error:
                             if error.code != "pending_evidence":
                                 raise
@@ -765,10 +800,10 @@ class Engine:
                                         check = subprocess.run(["git", "-C", str(self.project_root), "merge-base", "--is-ancestor", new["commit"], old["commit"]], capture_output=True)
                                         if check.returncode == 0:
                                             raise WorkflowError("stale", "Older commit cannot replace a newer fact")
-                        resolved[key] = digest(json.dumps({k: update[k] for k in ("topic", "claim_id", "claim_type", "content")}, sort_keys=True).encode())
+                        resolved[key] = digest(json.dumps({k: entry["update"][k] for k in ("topic", "claim_id", "claim_type", "content", "matter_id", "state_kind", "stage", "supersedes") if k in entry["update"]}, sort_keys=True).encode())
                         same_content = bool(previous and update["content"].strip() == previous["content"].strip())
                         # Repeating the same observation is idempotent; a later verified observation refreshes it.
-                        if same_content and update["observed_at"] == previous["observed_at"] and evidence == previous["evidence"] and update.get("review_after") == previous.get("review_after"):
+                        if same_content and update["observed_at"] == previous["observed_at"] and evidence == previous["evidence"] and update.get("review_after") == previous.get("review_after") and all(update.get(k) == previous.get(k) for k in ("matter_id", "state_kind", "stage", "supersedes")) and relationship_versions == previous.get("supersedes_versions", {}):
                             continue
                         version_id = previous.get("version_id", uuid.uuid4().hex) if same_content else uuid.uuid4().hex
                         history = list(previous.get("history", [])) if previous else []
@@ -785,7 +820,9 @@ class Engine:
                                 "environment": self.config.get("environment", "local"),
                                 "version_id": version_id, "evidence_status": "tool_verified", "lifecycle": "current",
                                 "last_verified_at": verified_at, "review_after": update.get("review_after"),
-                                "verification_count": previous.get("verification_count", 1) + 1 if same_content else 1}
+                                "verification_count": previous.get("verification_count", 1) + 1 if same_content else 1,
+                                "supersedes_versions": relationship_versions,
+                                **{k: update[k] for k in ("matter_id", "state_kind", "stage", "supersedes") if k in update}}
                         changes.append({"claim_id": update["claim_id"], "old_block": old_block, "new_block": block,
                                         "old_fact": previous, "fact": fact, "source_update": update})
                     if changes:
@@ -874,7 +911,8 @@ class Engine:
     def _save_job(self, job: dict) -> None:
         self._put("job", job["id"], job)
 
-    def resume(self, job_id: str) -> dict:
+    def resume(self, job_id: str, *, only_items: set[str] | None = None) -> dict:
+        self._native_query_cache = {}
         job = self._get("job", job_id)
         if not job:
             raise WorkflowError("job", "Unknown maintenance job")
@@ -899,7 +937,7 @@ class Engine:
                 return self._result(job)
         pending = [e["update"] for e in job.get("pending_updates", []) if not e.get("withdrawn")]
         if pending:
-            return self.submit(job_id, {"status": job["candidate"]["status"], "updates": pending})
+            return self.submit(job_id, {"status": job["candidate"]["status"], "updates": pending}, only_item=only_items)
         if not job.get("plans") and job.get("candidate") and not job.get("review_closed") and job["state"] != "no_change":
             return self.submit(job_id, job["candidate"])
         return self._result(job)
