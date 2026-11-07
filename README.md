@@ -8,7 +8,7 @@ CLI 是主要安装入口，可选 Codex 插件提供相同的设置向导。知
 
 ## 安装
 
-0.3.1 为已完成本地验收的候选。macOS arm64、Codex CLI 0.166.0 的直接 Hooks 与既有本地插件适配入口均完成普通测试任务、模型维护及新会话召回；本机原生补证查询需要正式工具审批。公开安装使用已发布版本，逐版本结果见[兼容性矩阵](docs/compatibility.md)。
+0.3.1 已在 macOS arm64、Codex CLI 0.166.0 和 Desktop 26.1103.32239 验证。直接 Hooks 与既有本地插件适配入口完成模型维护及新会话召回；Desktop 的连续普通测试任务也已在同轮自行完成补证。受限沙箱中的知识／状态写入仍按原生流程审批，实际频率与范围见[兼容性矩阵](docs/compatibility.md)。
 
 需要 Python 3.11+、Git 和 Codex Desktop；原生启用验证还需要 Codex CLI。客户端、接入方式和升级验证见[兼容性矩阵](docs/compatibility.md)。
 

@@ -30,7 +30,7 @@ CI runs syntax checks, isolated tests and two committed-source builds on the `ma
 
 CI uses the [GitHub-hosted macOS runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) and pinned releases of [checkout](https://github.com/actions/checkout/releases/tag/v7.0.1) and [setup-python](https://github.com/actions/setup-python/releases/tag/v7.0.0), with read-only repository permission and credential persistence disabled.
 
-## v0.3.1 local candidate acceptance and evaluation
+## v0.3.1 acceptance, evaluation and release evidence
 
 Keep candidate evidence and packages under `.local/v0.3.1/`, with one acceptance table at `.local/v0.3.1/ACCEPTANCE.md`. Preserve the v0.3.0 evaluation corpus and scoring rules; the fixed baseline commit is recorded in `evaluation/README.md`:
 

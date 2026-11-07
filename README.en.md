@@ -8,7 +8,7 @@ The CLI is the primary installation entry point. An optional Codex plugin provid
 
 ## Installation
 
-Version 0.3.1 is a locally accepted candidate. On macOS arm64 with Codex CLI 0.166.0, direct Hooks and an existing local plugin adapter completed ordinary test tasks, model-driven maintenance, and new-session recall. Native evidence queries on this machine require formal tool approval. Public installation uses a published release; see the [compatibility matrix](docs/compatibility.md) for version-specific results.
+Version 0.3.1 has been verified on macOS arm64 with Codex CLI 0.166.0 and Desktop 26.1103.32239. Direct Hooks and an existing local plugin adapter completed model-driven maintenance and new-session recall. Consecutive ordinary Desktop test tasks also supplemented their evidence within the same turn. Knowledge and state writes in a restricted sandbox still follow native approval; see the [compatibility matrix](docs/compatibility.md) for the observed frequency and scope.
 
 Python 3.11+, Git, and Codex Desktop are required. Verifying native activation also requires the Codex CLI. See the [compatibility matrix](docs/compatibility.md) for client, integration, and upgrade coverage.
 

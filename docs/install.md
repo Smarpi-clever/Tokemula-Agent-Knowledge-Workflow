@@ -50,7 +50,7 @@ CLI 与插件共用上述规则。命令行省略 `--knowledge` 时使用已有�
 
 安装或启用插件后，仍需原生信任当前 Hook 定义。定义变化后，按 Codex 提示重新审查。原生状态不可查询时，诊断保留待确认状态。旧聊天可能保留安装前的 Hook 状态，接入验证请使用新聊天。
 
-Hook 信任与 Agent 的工具、文件写入权限是两层确认。使用项目外的知识库及专属状态目录时，如原生审批阻塞维护，请由用户在当前原生聊天或审批界面直接批准这些限定路径的维护写入，保留项目源码只读和现有审批策略。其他聊天的确认或助手转述，不能替代当前原生流程要求的直接人类确认；安装器不绕过此流程。日常普通任务无需反复提醒维护，遇到实际权限提示时按原生要求批准限定范围。参阅[原生权限请求](https://learn.chatgpt.com/docs/app-server#permission-requests)与[审批机制](https://learn.chatgpt.com/docs/sandboxing/auto-review)。
+Hook 信任与 Agent 的工具、文件写入权限分开核对。使用项目外的知识库及专属状态目录时，在当前客户端的原生流程中批准这些限定路径的维护写入及只读原生补证，保留现有沙箱和审批策略；实际授权范围以该会话的原生记录为准。日常普通任务中，模型可自行申请正式工具权限并重试维护命令，复用已执行的测试回执。0.3.1 的 Desktop 实测首轮、后续轮均在普通任务内完成，无需另发补证指令；当前受限目录场景每轮仍有 prepare、submit 两条权限请求。参阅[原生权限请求](https://learn.chatgpt.com/docs/app-server#permission-requests)与[审批机制](https://learn.chatgpt.com/docs/sandboxing/auto-review)，逐客户端结果见[兼容性矩阵](compatibility.md)。
 
 Setup 预览同时显示知识库和状态目录。允许自动更新时，应用结果会提醒用户按实际原生审批批准维护写入；新聊天由 SessionStart Hook 提供实际知识库路径和按需读取入口。用户与 Agent 共用这些 Markdown 文件，自动更新保留人工正文。
 
